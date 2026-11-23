@@ -16,7 +16,7 @@
     },
     minecraft: {
       title: 'Minecraft', variant: '试炼密室', short: '试炼密室 / 要塞', accent: '#80d5a4', icon: 'blocks',
-      projection: 'space', view: '原生三维',
+      projection: 'space', view: '方块剖面',
       summary: '从入口的连接器出发，按权重挑选、旋转并贴合三维模块，避开已占空间。',
       phases: [
         ['初始化连接器', '入口模板暴露连接器，并指定各门位的模板池。'],

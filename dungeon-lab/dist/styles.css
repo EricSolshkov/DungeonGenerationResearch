@@ -110,7 +110,7 @@ p, h1, h2, h3, ol, dl, dd { margin: 0; }
 .stage-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #6cdeb8; box-shadow: 0 0 7px #69e6b96b; }
 .select-wrap.scene-level { position: absolute; top: 12px; right: 13px; z-index: 1; }
 .scene-level select { height: 30px; background: #11192bdc; }
-.scene-tag { position: absolute; top: 0; left: 0; transform: translate(-50%, -100%); pointer-events: none; color: #f6f0ff; background: #0c1323ec; border: 1px solid var(--tag-color, #8ca7fa); border-radius: 6px; padding: 4px 7px; font: 600 .75rem/1.25 var(--mono); box-shadow: 0 3px 12px #0507119c; white-space: nowrap; }
+.scene-tag { position: absolute; top: 0; left: 0; transform: translate(-50%, -100%); width: max-content; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; pointer-events: none; color: #f6f0ff; background: #0c1323ec; border: 1px solid var(--tag-color, #8ca7fa); border-radius: 6px; padding: 4px 7px; font: 600 .75rem/1.25 var(--mono); box-shadow: 0 3px 12px #0507119c; white-space: nowrap; }
 .axes { position: absolute; left: 13px; bottom: 11px; width: 45px; height: 43px; pointer-events: none; }
 .axes svg { display: block; width: 100%; height: 100%; font: 650 8px var(--mono); }
 .axes path { fill: none; stroke-width: 1.25; stroke-linecap: round; }
@@ -236,6 +236,7 @@ dialog::backdrop { background: #040712b5; backdrop-filter: blur(3px); }
   .lab .process { grid-column: 2; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
   .phase-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lab.is-comparing { grid-template-columns: 202px minmax(0, 1fr); }
+  .is-comparing .scene-stage { height: clamp(258px, calc(var(--stage-height) - 69px), 340px); }
 }
 @media (max-width: 760px) {
   :root { --stage-height: clamp(305px, 55vw, 410px); }

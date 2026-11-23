@@ -16,6 +16,7 @@
   const metrics = [['rooms', '房间数'], ['doors', '连接数'], ['branches', '分岔点'], ['loops', '环路数']];
   const levelMetrics = [['floors', '楼层数'], ['stairs', '跨层楼梯']];
   const moveKeys = new Set(['w', 'a', 's', 'd', 'q', 'e']);
+  const sceneLabel = (algorithm, mode) => algorithm.projection === 'space' && mode === 'fly' ? '室内漫游' : algorithm.view;
   const view = {
     lab: byId('lab'), workbench: byId('workbench'), panes: byId('panes'),
     stats: byId('stats'), algorithms: byId('algorithms'), inspector: byId('inspector'),
@@ -139,7 +140,7 @@
     }
     if (!frame.rooms.some((room) => room.id === pane.selected && (pane.level === null || room.level === pane.level))) pane.selected = null;
     pane.frame = frame;
-    pane.badge.textContent = template.view;
+    pane.badge.textContent = sceneLabel(template, pane.scene.mode);
     pane.mapTitle.textContent = template.projection === 'side' ? '侧视小地图' : '俯视小地图';
     pane.scene.setLayout(layout, frame, pane.selected, state.cursor < timeline.length - 1, pane.level);
     pane.phase.textContent = template.phases[frame.phase][0];
@@ -357,7 +358,9 @@
   }
 
   function setMode(mode) {
-    panes[state.active].scene.setMode(mode);
+    const pane = panes[state.active];
+    pane.scene.setMode(mode);
+    pane.badge.textContent = sceneLabel(algorithms[state.algorithms[state.active]], mode);
     renderActive();
   }
 

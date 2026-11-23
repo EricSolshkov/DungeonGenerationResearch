@@ -2,6 +2,7 @@
   'use strict';
 
   const { roles, portalRoute, label, port, connectionPath } = globalThis.DungeonGenerators;
+  const { addRoom: minecraftRoom, addPassage: minecraftPassage } = globalThis.DungeonMinecraftMesh;
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const add = (a, b) => a.map((number, index) => number + b[index]);
   const subtract = (a, b) => a.map((number, index) => number - b[index]);
@@ -44,7 +45,7 @@
     return corners;
   }
 
-  function strongholdYaw(rooms) {
+  function minecraftYaw(rooms) {
     const center = scale(rooms.reduce((sum, room) => add(sum, [room.x, 0, room.z]), [0, 0, 0]), 1 / rooms.length);
     let xx = 0;
     let xz = 0;
@@ -57,8 +58,8 @@
       zz += z * z;
     }
     const yaw = -.5 * Math.atan2(2 * xz, xx - zz) - .1;
-    const portal = rooms.find((room) => room.role === 'portal');
-    const bearing = subtract([portal.x, 0, portal.z], center);
+    const landmark = rooms.find((room) => room.role === 'portal' || room.role === 'reward') || rooms[0];
+    const bearing = subtract([landmark.x, 0, landmark.z], center);
     return dot(heading(yaw, 0), bearing) >= 0 ? yaw : yaw + Math.PI;
   }
 
@@ -202,59 +203,13 @@
     }
   }
 
-  function strongholdInterior(mesh, room, tone) {
-    const { x, y, z, w, d, facing, role } = room;
-    const alongX = facing === 'e' || facing === 'w';
-    const sign = facing === 'n' || facing === 'w' ? -1 : 1;
-    const place = (across, forward) => [x + (alongX ? sign * forward : across), z + (alongX ? across : sign * forward)];
-    const feature = (across, forward, halfWidth, halfLength, bottom, top, fill, edge) => {
-      const [px, pz] = place(across, forward);
-      const xx = alongX ? halfLength : halfWidth;
-      const zz = alongX ? halfWidth : halfLength;
-      mesh.box(px - xx, y + bottom, pz - zz, px + xx, y + top, pz + zz, fill, edge);
-    };
-    if (role === 'portal') {
-      const accent = tint(rgb(roles.portal.color), .95);
-      const frame = tint(rgb('#587d79'));
-      feature(0, .65, 2.24, 2.05, 0, .47, tone.trim, accent);
-      feature(0, -1.74, 1.29, .36, 0, .22, tone.trim, tone.edge);
-      for (const side of [-1, 1]) {
-        feature(side * 1.76, .65, .23, 1.98, .47, .84, frame, accent);
-        feature(0, .65 + side * 1.76, 1.53, .23, .47, .84, frame, accent);
-      }
-      feature(0, .65, 1.51, 1.51, .47, .55, tint(rgb('#4c396d')));
-      const [px, pz] = place(0, .65);
-      symbol(mesh, [px, y + .566, pz], .95, role, false);
-      return;
-    }
-    if (role === 'library') {
-      const crossSize = alongX ? d : w;
-      const run = alongX ? w : d;
-      for (const side of [-1, 1]) {
-        const offset = side * (crossSize / 2 - 1.08);
-        feature(offset, 0, .41, run * .33, 0, 1.8, tint(rgb('#6b4c48')), tone.edge);
-        for (const height of [.48, 1.06, 1.65]) {
-          feature(offset, 0, .47, run * .34, height, height + .12, tint(rgb('#b18560')), tone.grid);
-        }
-      }
-      return;
-    }
-    if (room.template === '监牢') {
-      const crossSize = alongX ? d : w;
-      for (const end of [-1.55, -.85, -.15, .55, 1.25]) {
-        feature(crossSize * .24, end, .058, .068, 0, 1.96, tint(rgb('#68778b')), tone.grid);
-      }
-      feature(crossSize * .24, -.15, .08, 1.43, 1.43, 1.53, tint(rgb('#68778b')), tone.grid);
-    }
-  }
-
-  function planRoom(mesh, room, doors, tone, nativeSpace, stronghold) {
+  function planRoom(mesh, room, doors, tone) {
     const { x, y, z, w, h, d } = room;
     const left = x - w / 2;
     const right = x + w / 2;
     const back = z - d / 2;
     const front = z + d / 2;
-    const wall = nativeSpace ? .31 : .24;
+    const wall = .24;
     mesh.box(left, y - .34, back, right, y, front, tone.floor, tone.edge);
     floorTiles(mesh, room, tone);
     for (const side of ['n', 'e', 's', 'w']) {
@@ -270,26 +225,16 @@
       aroundOpening(center - extent, center + extent, center, opening, (from, to) => {
         span(from, to, y, y + h - .12);
         span(from, to, y + h - .12, y + h, tone.trim);
-        if (stronghold) {
-          const inside = side === 'n' || side === 'w' ? boundary + wall + .012 : boundary - .012;
-          for (let height = y + .53; height < y + h - .19; height += .54) {
-            if (acrossX) mesh.line([from, height, inside], [to, height, inside], tone.grid);
-            else mesh.line([inside, height, from], [inside, height, to], tone.grid);
-          }
-        }
       });
       if (opening) span(center - opening, center + opening, y + 2.01, y + h, tone.trim, tone.grid);
     }
-    if ((nativeSpace && !stronghold) || room.template === '四柱厅') {
-      const pillar = nativeSpace ? tint(mix(tone.accent, rgb('#be7f5c'), .52)) : tone.trim;
+    if (room.template === '四柱厅') {
       for (const [dx, dz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
         const px = x + dx * (w / 2 - .61);
         const pz = z + dz * (d / 2 - .61);
-        mesh.box(px - .16, y, pz - .16, px + .16, y + h * .80, pz + .16, pillar, tone.grid);
+        mesh.box(px - .16, y, pz - .16, px + .16, y + h * .80, pz + .16, tone.trim, tone.grid);
       }
     }
-    if (stronghold) strongholdInterior(mesh, room, tone);
-    if (room.role === 'portal' || room.role === 'library') return;
     if (room.role !== 'normal') {
       const podium = room.role !== 'start';
       if (podium) mesh.box(x - .74, y, z - .65, x + .74, y + .24, z + .65, tone.trim, tone.edge);
@@ -318,7 +263,7 @@
     }
   }
 
-  function planPassage(mesh, [start, end], color, marked = false) {
+  function planPassage(mesh, [start, end], color) {
     const alongX = start[0] !== end[0];
     const width = 1.07;
     const rise = end[1] - start[1];
@@ -333,7 +278,6 @@
       const bottom = top - Math.max(.2, Math.abs(rise / steps) + .06);
       if (alongX) mesh.box(Math.min(a[0], b[0]), bottom, a[2] - width, Math.max(a[0], b[0]), top, a[2] + width, floor, trim);
       else mesh.box(a[0] - width, bottom, Math.min(a[2], b[2]), a[0] + width, top, Math.max(a[2], b[2]), floor, trim);
-      if (marked) mesh.line([a[0], top + .03, a[2]], [b[0], top + .03, b[2]], tint(color, .92));
     }
     for (const offset of [-width, width]) {
       const rail = alongX ? [0, .45, offset] : [offset, .45, 0];
@@ -355,14 +299,15 @@
     mesh.box(room.x - w / 2, room.y, room.z - d / 2, room.x + w / 2, room.y + h, room.z + d / 2, tint(color, .105), tint(color, .72));
   }
 
-  function portMark(mesh, room, entry) {
+  function portMark(mesh, room, entry, cutaway) {
     if (entry.state === 'matched') return;
     const [x, y, z] = port(room, entry.side);
     const normal = { n: [0, 0, -.02], s: [0, 0, .02], w: [-.02, 0, 0], e: [.02, 0, 0] }[entry.side];
     const alongX = entry.side === 'n' || entry.side === 's';
     const color = entry.state === 'capped' ? tint(rgb('#8495b8'), .49) : tint(rgb('#80e2b6'));
     const point = (across, up) => add([x + (alongX ? across : 0), y + up, z + (alongX ? 0 : across)], normal);
-    mesh.stroke([point(-.66, .32), point(.66, .32), point(.66, 1.71), point(-.66, 1.71)], color);
+    const top = entry.state === 'capped' && cutaway?.has(entry.side) ? .8 : 1.71;
+    mesh.stroke([point(-.66, .32), point(.66, .32), point(.66, top), point(-.66, top)], color);
     if (entry.state === 'waiting') mesh.line(point(-.26, 1.03), point(.26, 1.03), color);
   }
 
@@ -394,12 +339,11 @@
     const [x, y, z] = port(room, side);
     const width = Math.max(.22, Math.abs(x - room.x));
     const depth = Math.max(.22, Math.abs(z - room.z));
-    mesh.face(floorRectangle((x + room.x) / 2, y + .03, (z + room.z) / 2, width, depth), tint(color, .71));
+    mesh.face(floorRectangle((x + room.x) / 2, y + .061, (z + room.z) / 2, width, depth), tint(color, .85));
   }
 
-  function buildMesh(frame, layout, selected, showFocus, level) {
+  function buildMesh(frame, layout, selected, showFocus, level, cutaway) {
     const { id, projection } = layout;
-    const stronghold = id === 'stronghold';
     const model = new Mesh();
     const previews = new Mesh();
     const doors = frame.rooms.map(() => new Set());
@@ -415,7 +359,8 @@
         doors[edge.b].add(edge.bSide);
         const path = visiblePassage(connectionPath(a, b, edge, projection), from, to);
         if (projection === 'side') sidePassage(model, path, color);
-        else planPassage(model, path, color, edge.toPortal);
+        else if (projection === 'space') minecraftPassage(model, path, id, cutaway, edge.toPortal);
+        else planPassage(model, path, color);
         if (edge.toPortal && from) markRoomRoute(model, a, edge.aSide, color);
         if (edge.toPortal && to) markRoomRoute(model, b, edge.bSide, color);
       } else {
@@ -429,13 +374,14 @@
       const tone = colors(room.role);
       if (!room.shell) candidateBox(previews, room, tone.accent);
       else if (projection === 'side') sideRoom(model, room, doors[room.id], tone);
-      else planRoom(model, room, doors[room.id], tone, projection === 'space', stronghold);
+      else if (projection === 'space') minecraftRoom(model, room, doors[room.id], id, cutaway);
+      else planRoom(model, room, doors[room.id], tone);
       if (room.id === selected || (showFocus && selected === null && room.id === frame.focus)) {
         const top = room.y + (room.shell ? room.h : room.h * .68) + .04;
         model.stroke(floorRectangle(room.x, top, room.z, room.w + .18, room.d + .18), tint(tone.accent, .94));
       }
     }
-    frame.ports.forEach((entry) => portMark(model, frame.rooms[entry.room], entry));
+    frame.ports.forEach((entry) => portMark(model, frame.rooms[entry.room], entry, cutaway));
     if (frame.candidate && onLevel(frame.candidate, level)) candidateBox(previews, frame.candidate, rgb('#ff7b9b'), true);
     return { model, previews };
   }
@@ -476,17 +422,26 @@
   }
 
   function vertices(primitives, triangles) {
-    const result = [];
+    const size = primitives.reduce((count, { points }) => count + (triangles ? (points.length - 2) * 3 : points.length), 0);
+    const result = new Float32Array(size * 7);
+    let offset = 0;
+    const write = (point, color) => {
+      result.set(point, offset);
+      result.set(color, offset + 3);
+      offset += 7;
+    };
     for (const { points, color } of primitives) {
       if (!triangles) {
-        for (const point of points) result.push(...point, ...color);
+        for (const point of points) write(point, color);
         continue;
       }
       for (let index = 1; index < points.length - 1; index += 1) {
-        for (const point of [points[0], points[index], points[index + 1]]) result.push(...point, ...color);
+        write(points[0], color);
+        write(points[index], color);
+        write(points[index + 1], color);
       }
     }
-    return new Float32Array(result);
+    return result;
   }
 
   class WebGLDrawing {
@@ -689,6 +644,7 @@
 
     setLayout(layout, frame, selected, showFocus, level = null) {
       const changed = this.layout !== layout || this.level !== level;
+      if (!changed && this.frame === frame && this.selected === selected && this.showFocus === showFocus) return;
       this.layout = layout;
       this.frame = frame;
       this.selected = selected;
@@ -707,20 +663,30 @@
         }
         this.bounds = limits(viewedBounds);
         this.corners = cornersOf(viewedBounds);
-        if (layout.id === 'stronghold') {
-          this.strongholdYaw = strongholdYaw(layout.final.rooms);
+        if (layout.projection === 'space') {
+          this.minecraftYaw = minecraftYaw(layout.final.rooms);
           this.fitCenter = centerInView(this.bounds.center, this.corners, this.defaultOrbit());
         } else this.fitCenter = this.bounds.center;
         this.fitAspect = null;
         this.drawing.setGrid(makeGrid(this.bounds));
         this.reset();
       }
-      this.drawing.setMeshes(buildMesh(frame, layout, selected, showFocus, level));
+      this.updateMesh();
       this.requestDraw();
     }
 
+    updateMesh() {
+      let cutaway = null;
+      if (this.layout.projection === 'space' && this.mode === 'orbit') {
+        const { yaw } = this.defaultOrbit();
+        cutaway = new Set([Math.sin(yaw) < 0 ? 'w' : 'e', Math.cos(yaw) < 0 ? 'n' : 's']);
+      }
+      this.drawing.setMeshes(buildMesh(this.frame, this.layout, this.selected, this.showFocus, this.level, cutaway));
+    }
+
     defaultOrbit() {
-      if (this.layout.id === 'stronghold') return { yaw: this.strongholdYaw, pitch: this.level === null ? .56 : .89 };
+      if (this.layout.id === 'stronghold') return { yaw: this.minecraftYaw, pitch: this.level === null ? .56 : .89 };
+      if (this.layout.id === 'minecraft') return { yaw: this.minecraftYaw, pitch: .68 };
       return this.layout.projection === 'side' ? { yaw: .31, pitch: .37 } : { yaw: .61, pitch: .78 };
     }
 
@@ -732,16 +698,20 @@
       const firstEdge = this.layout.final.edges.find((edge) => edge.a === entrance.id || edge.b === entrance.id);
       const neighbor = firstEdge && this.layout.final.rooms[firstEdge.a === entrance.id ? firstEdge.b : firstEdge.a];
       const toward = neighbor ? [neighbor.x - entrance.x, neighbor.z - entrance.z] : [1, 0];
-      const pitch = this.layout.id === 'stronghold' && neighbor ? Math.atan2(neighbor.y - entrance.y, Math.hypot(...toward)) : .01;
+      const pitch = this.layout.projection === 'space' && neighbor
+        ? clamp(Math.atan2(neighbor.y - entrance.y, Math.hypot(...toward)) * .65 - .07, -.34, -.07)
+        : .01;
       this.fly = { eye: [entrance.x, entrance.y + 1.52, entrance.z], yaw: Math.atan2(...toward), pitch };
       this.requestDraw();
     }
 
     setMode(mode) {
+      const changed = this.mode !== mode;
       this.mode = mode;
       this.clearMove();
       this.flyOverlay.hidden = mode !== 'fly';
       this.pane.classList.toggle('is-flying', mode === 'fly');
+      if (changed && this.layout?.projection === 'space') this.updateMesh();
       this.requestDraw();
     }
 
@@ -816,12 +786,14 @@
       if (!room) { this.tag.hidden = true; return; }
       const view = toView([room.x, room.y + room.h + .56, room.z], camera);
       const [x, y] = toScreen(view, width, height);
-      this.tag.hidden = view[2] < near || x < 42 || y < 32 || x > width - 42 || y > height - 9;
+      this.tag.hidden = view[2] < near || x < 0 || y < 32 || x > width || y > height - 9;
       if (this.tag.hidden) return;
-      this.tag.style.left = `${x}px`;
+      const text = `${label(room)} · ${roles[room.role].name}`;
+      if (this.tag.textContent !== text) this.tag.textContent = text;
+      const margin = this.tag.offsetWidth / 2 + 6;
+      this.tag.style.left = `${clamp(x, margin, width - margin)}px`;
       this.tag.style.top = `${y}px`;
       this.tag.style.setProperty('--tag-color', roles[room.role].color);
-      this.tag.textContent = `${label(room)} · ${roles[room.role].name}`;
     }
 
     drawMap() {
