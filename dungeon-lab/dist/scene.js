@@ -3,6 +3,7 @@
 
   const { roles, portalRoute, label, port, connectionPath } = globalThis.DungeonGenerators;
   const { addRoom: minecraftRoom, addPassage: minecraftPassage } = globalThis.DungeonMinecraftMesh;
+  const { doorHeights, worldPoint } = globalThis.StrongholdTemplates;
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const add = (a, b) => a.map((number, index) => number + b[index]);
   const subtract = (a, b) => a.map((number, index) => number - b[index]);
@@ -15,7 +16,7 @@
   const tint = (color, alpha = 1) => [...color, alpha];
   const cssColor = ([r, g, b, a]) => `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
   const near = 0.08;
-  const far = 430;
+  const far = 3200;
   const focal = 1 / Math.tan(Math.PI / 9.6);
   const heading = (yaw, pitch) => [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
 
@@ -299,7 +300,17 @@
     mesh.box(room.x - w / 2, room.y, room.z - d / 2, room.x + w / 2, room.y + h, room.z + d / 2, tint(color, .105), tint(color, .72));
   }
 
-  function portMark(mesh, room, entry, cutaway) {
+  function portMark(mesh, room, entry, cutaway, highlighted = false) {
+    if (entry.point) {
+      if (!highlighted && entry.state !== 'waiting') return;
+      const [x, y, z] = entry.point;
+      const acrossX = entry.side === 'n' || entry.side === 's';
+      const at = (delta, up) => [x + (acrossX ? delta : 0), y + up, z + (acrossX ? 0 : delta)];
+      const color = tint(rgb(entry.hasOpening === false ? '#fa8392' : entry.state === 'waiting' ? '#76e5be' : '#f7c979'));
+      mesh.stroke([at(-1.5, .04), at(1.5, .04), at(1.5, 3), at(-1.5, 3)], color);
+      if (!entry.hasOpening) mesh.line(at(-1.5, .04), at(1.5, 3), color);
+      return;
+    }
     if (entry.state === 'matched') return;
     const [x, y, z] = port(room, entry.side);
     const normal = { n: [0, 0, -.02], s: [0, 0, .02], w: [-.02, 0, 0], e: [.02, 0, 0] }[entry.side];
@@ -327,7 +338,7 @@
     return grid;
   }
 
-  const onLevel = (room, level) => level === null || room.level === level;
+  const onLevel = (room, level) => level === null || doorHeights(room).includes(level);
 
   function visiblePassage(points, from, to) {
     if (from && to) return points;
@@ -335,24 +346,26 @@
     return from ? [points[0], middle] : [middle, points.at(-1)];
   }
 
-  function markRoomRoute(mesh, room, side, color) {
-    const [x, y, z] = port(room, side);
-    const width = Math.max(.22, Math.abs(x - room.x));
-    const depth = Math.max(.22, Math.abs(z - room.z));
-    mesh.face(floorRectangle((x + room.x) / 2, y + .061, (z + room.z) / 2, width, depth), tint(color, .85));
-  }
-
-  function buildMesh(frame, layout, selected, showFocus, level, cutaway) {
+  function buildMesh(frame, layout, selected, showFocus, level, cutaway, isolated) {
     const { id, projection } = layout;
     const model = new Mesh();
     const previews = new Mesh();
     const doors = frame.rooms.map(() => new Set());
+    const visible = (room) => onLevel(room, level) && (!isolated || room.id === selected);
+    const routeRooms = new Set();
     for (const edge of frame.edges) {
       const a = frame.rooms[edge.a];
       const b = frame.rooms[edge.b];
-      const from = onLevel(a, level);
-      const to = onLevel(b, level);
+      const from = visible(a);
+      const to = visible(b);
       if (!from && !to) continue;
+      if (id === 'stronghold') {
+        if (edge.toPortal) {
+          routeRooms.add(a.id);
+          routeRooms.add(b.id);
+        }
+        continue;
+      }
       const color = edge.toPortal ? rgb(portalRoute.color) : edge.hidden ? rgb(roles.secret.color) : edge.rewardLoop ? rgb('#c69a60') : neutral;
       if (edge.open) {
         doors[edge.a].add(edge.aSide);
@@ -361,8 +374,6 @@
         if (projection === 'side') sidePassage(model, path, color);
         else if (projection === 'space') minecraftPassage(model, path, id, cutaway, edge.toPortal);
         else planPassage(model, path, color);
-        if (edge.toPortal && from) markRoomRoute(model, a, edge.aSide, color);
-        if (edge.toPortal && to) markRoomRoute(model, b, edge.bSide, color);
       } else {
         const centers = [a, b].map((room) => [room.x, room.y + (projection === 'side' ? room.h / 2 : .13), room.z]);
         const [start, end] = visiblePassage(centers, from, to);
@@ -370,7 +381,7 @@
       }
     }
     for (const room of frame.rooms) {
-      if (!onLevel(room, level)) continue;
+      if (!visible(room)) continue;
       const tone = colors(room.role);
       if (!room.shell) candidateBox(previews, room, tone.accent);
       else if (projection === 'side') sideRoom(model, room, doors[room.id], tone);
@@ -380,9 +391,20 @@
         const top = room.y + (room.shell ? room.h : room.h * .68) + .04;
         model.stroke(floorRectangle(room.x, top, room.z, room.w + .18, room.d + .18), tint(tone.accent, .94));
       }
+      if (routeRooms.has(room.id)) {
+        model.stroke(floorRectangle(room.x, room.y + room.h + .02, room.z, room.w - .1, room.d - .1), tint(rgb(portalRoute.color)));
+      }
     }
-    frame.ports.forEach((entry) => portMark(model, frame.rooms[entry.room], entry, cutaway));
-    if (frame.candidate && onLevel(frame.candidate, level)) candidateBox(previews, frame.candidate, rgb('#ff7b9b'), true);
+    for (const entry of frame.ports) {
+      const room = frame.rooms[entry.room];
+      if (!visible(room)) continue;
+      const inspecting = room.id === selected || (showFocus && frame.focusPort?.room === room.id && frame.focusPort.id === entry.id);
+      if (id === 'stronghold' && entry.state === 'inactive' && !inspecting) continue;
+      portMark(model, room, entry, cutaway, inspecting);
+    }
+    if (frame.candidate && !isolated && (level === null || frame.focusPort?.point[1] === level)) {
+      candidateBox(previews, frame.candidate, rgb('#ff7b9b'), true);
+    }
     return { model, previews };
   }
 
@@ -642,29 +664,25 @@
       new ResizeObserver(() => this.requestDraw()).observe(this.canvas);
     }
 
-    setLayout(layout, frame, selected, showFocus, level = null) {
-      const changed = this.layout !== layout || this.level !== level;
+    setLayout(layout, frame, selected, showFocus, level = null, isolated = false) {
+      const inspectId = isolated ? selected : null;
+      const openingView = layout.id === 'stronghold' && !isolated && showFocus && frame.phase === 0 && level === null;
+      const changed = this.layout !== layout || this.level !== level || this.inspectId !== inspectId || this.openingView !== openingView;
       if (!changed && this.frame === frame && this.selected === selected && this.showFocus === showFocus) return;
       this.layout = layout;
       this.frame = frame;
       this.selected = selected;
       this.showFocus = showFocus;
       this.level = level;
+      this.inspectId = inspectId;
+      this.openingView = openingView;
       if (changed) {
-        const viewedBounds = layout.final.rooms.filter((room) => onLevel(room, level));
-        if (level !== null) {
-          for (const edge of layout.final.edges) {
-            const a = layout.final.rooms[edge.a];
-            const b = layout.final.rooms[edge.b];
-            if (onLevel(a, level) === onLevel(b, level)) continue;
-            const [x, y, z] = mix(port(a, edge.aSide), port(b, edge.bSide), .5);
-            viewedBounds.push({ x, y, z, w: 2.3, d: 2.3, h: 1.35 });
-          }
-        }
+        const population = openingView ? layout.final.rooms.slice(0, 2) : layout.final.rooms;
+        const viewedBounds = population.filter((room) => this.roomVisible(room));
         this.bounds = limits(viewedBounds);
         this.corners = cornersOf(viewedBounds);
         if (layout.projection === 'space') {
-          this.minecraftYaw = minecraftYaw(layout.final.rooms);
+          this.minecraftYaw = minecraftYaw(viewedBounds);
           this.fitCenter = centerInView(this.bounds.center, this.corners, this.defaultOrbit());
         } else this.fitCenter = this.bounds.center;
         this.fitAspect = null;
@@ -675,17 +693,24 @@
       this.requestDraw();
     }
 
+    roomVisible(room) {
+      return onLevel(room, this.level) && (this.inspectId === null || room.id === this.inspectId);
+    }
+
+    cutSides() {
+      if (this.layout.projection !== 'space' || this.mode !== 'orbit') return '';
+      const yaw = this.layout.id === 'stronghold' ? this.orbit.yaw : this.defaultOrbit().yaw;
+      return (Math.sin(yaw) < 0 ? 'w' : 'e') + (Math.cos(yaw) < 0 ? 'n' : 's');
+    }
+
     updateMesh() {
-      let cutaway = null;
-      if (this.layout.projection === 'space' && this.mode === 'orbit') {
-        const { yaw } = this.defaultOrbit();
-        cutaway = new Set([Math.sin(yaw) < 0 ? 'w' : 'e', Math.cos(yaw) < 0 ? 'n' : 's']);
-      }
-      this.drawing.setMeshes(buildMesh(this.frame, this.layout, this.selected, this.showFocus, this.level, cutaway));
+      this.cutKey = this.cutSides();
+      const cutaway = this.cutKey ? new Set(this.cutKey) : null;
+      this.drawing.setMeshes(buildMesh(this.frame, this.layout, this.selected, this.showFocus, this.level, cutaway, this.inspectId !== null));
     }
 
     defaultOrbit() {
-      if (this.layout.id === 'stronghold') return { yaw: this.minecraftYaw, pitch: this.level === null ? .56 : .89 };
+      if (this.layout.id === 'stronghold') return { yaw: this.inspectId === null ? this.minecraftYaw : -.62, pitch: this.inspectId !== null ? .68 : this.level === null ? .72 : .89 };
       if (this.layout.id === 'minecraft') return { yaw: this.minecraftYaw, pitch: .68 };
       return this.layout.projection === 'side' ? { yaw: .31, pitch: .37 } : { yaw: .61, pitch: .78 };
     }
@@ -694,7 +719,7 @@
       if (!this.layout) return;
       const orbit = this.defaultOrbit();
       this.orbit = { ...orbit, target: [...this.fitCenter], zoom: 1 };
-      const entrance = this.frame.rooms.find((room) => onLevel(room, this.level));
+      const entrance = this.frame.rooms.find((room) => this.roomVisible(room));
       const firstEdge = this.layout.final.edges.find((edge) => edge.a === entrance.id || edge.b === entrance.id);
       const neighbor = firstEdge && this.layout.final.rooms[firstEdge.a === entrance.id ? firstEdge.b : firstEdge.a];
       const toward = neighbor ? [neighbor.x - entrance.x, neighbor.z - entrance.z] : [1, 0];
@@ -702,12 +727,35 @@
         ? clamp(Math.atan2(neighbor.y - entrance.y, Math.hypot(...toward)) * .65 - .07, -.34, -.07)
         : .01;
       this.fly = { eye: [entrance.x, entrance.y + 1.52, entrance.z], yaw: Math.atan2(...toward), pitch };
+      if (this.layout.id === 'stronghold') this.enterRoom(entrance);
+      this.requestDraw();
+    }
+
+    enterRoom(room) {
+      const entry = room.connectors.find((p) => p.id === 'entry');
+      const toward = { n: [0, -1], e: [1, 0], s: [0, 1], w: [-1, 0] }[room.facing];
+      const inward = Math.min(1.35, room.localD / 2);
+      this.fly = { eye: worldPoint(room, [entry.x, entry.y + 1.55, entry.z + inward]), yaw: Math.atan2(...toward), pitch: -.08 };
+    }
+
+    focusRoom(room) {
+      if (this.mode === 'orbit') {
+        this.orbit.target = [room.x, room.y + room.h / 2, room.z];
+        const aspect = Math.max(.1, this.canvas.clientWidth / (this.canvas.clientHeight || 1));
+        this.orbit.zoom = room.templateId && this.inspectId === null
+          ? clamp(Math.max(room.w, room.h, room.d) * 3.3 / Math.min(1, aspect) / this.fit(aspect), .025, 1)
+          : this.inspectId === null ? .48 : 1;
+      } else if (room.templateId) this.enterRoom(room);
+      else this.fly.eye = [room.x, room.y + 1.52, room.z];
       this.requestDraw();
     }
 
     setMode(mode) {
       const changed = this.mode !== mode;
       this.mode = mode;
+      if (changed && mode === 'fly' && this.layout?.id === 'stronghold' && this.selected !== null) {
+        this.enterRoom(this.frame.rooms[this.selected]);
+      }
       this.clearMove();
       this.flyOverlay.hidden = mode !== 'fly';
       this.pane.classList.toggle('is-flying', mode === 'fly');
@@ -753,6 +801,7 @@
       const { width, height, density } = resizeCanvas(this.canvas);
       if (!width || !height) { this.lastTime = 0; return; }
       const moving = this.mode === 'fly' && this.keys.size + this.touches.size > 0;
+      if (this.cutSides() !== this.cutKey) this.updateMesh();
       const aspect = width / height;
       let camera = this.cameraFor(aspect);
       if (moving) {
@@ -782,13 +831,13 @@
     drawTag(width, height, camera) {
       const orbitMarker = this.showFocus ? this.frame.focus : this.frame.rooms.find((room) => room.role === 'portal')?.id;
       const id = this.selected ?? (this.mode === 'orbit' ? orbitMarker : null);
-      const room = this.frame.rooms.find((entry) => entry.id === id && onLevel(entry, this.level));
+      const room = this.frame.rooms.find((entry) => entry.id === id && this.roomVisible(entry));
       if (!room) { this.tag.hidden = true; return; }
       const view = toView([room.x, room.y + room.h + .56, room.z], camera);
       const [x, y] = toScreen(view, width, height);
       this.tag.hidden = view[2] < near || x < 0 || y < 32 || x > width || y > height - 9;
       if (this.tag.hidden) return;
-      const text = `${label(room)} · ${roles[room.role].name}`;
+      const text = `${label(room)} · ${room.templateId ? room.template : roles[room.role].name}`;
       if (this.tag.textContent !== text) this.tag.textContent = text;
       const margin = this.tag.offsetWidth / 2 + 6;
       this.tag.style.left = `${clamp(x, margin, width - margin)}px`;
@@ -813,20 +862,21 @@
       for (const edge of this.frame.edges) {
         const a = this.frame.rooms[edge.a];
         const b = this.frame.rooms[edge.b];
-        const from = onLevel(a, this.level);
-        const to = onLevel(b, this.level);
+        const from = this.roomVisible(a);
+        const to = this.roomVisible(b);
         if (!from && !to) continue;
-        const [start, end] = visiblePassage([flatten(a), flatten(b)], from, to);
+        const path = edge.aPoint ? [from && flatten(a), position(edge.aPoint[0], edge.aPoint[2]), to && flatten(b)].filter(Boolean)
+          : visiblePassage([flatten(a), flatten(b)], from, to);
         context.beginPath();
         context.strokeStyle = edge.toPortal ? portalRoute.color : edge.hidden ? '#ba85eeb6' : '#8099d3b0';
         context.setLineDash(edge.open && !edge.hidden ? [] : [2, 2]);
-        context.moveTo(...start);
-        context.lineTo(...end);
+        context.moveTo(...path[0]);
+        for (const point of path.slice(1)) context.lineTo(...point);
         context.stroke();
       }
       context.setLineDash([]);
       this.mapRooms = [];
-      const rooms = this.frame.rooms.filter((room) => onLevel(room, this.level)).sort((a, b) => a.y - b.y);
+      const rooms = this.frame.rooms.filter((room) => this.roomVisible(room)).sort((a, b) => a.y - b.y);
       for (const room of rooms) {
         const [x, y] = flatten(room);
         const w = Math.max(4, room.w * ratio);
@@ -854,7 +904,7 @@
     }
 
     zoom(factor) {
-      this.orbit.zoom = clamp(this.orbit.zoom * factor, .17, 4.8);
+      this.orbit.zoom = clamp(this.orbit.zoom * factor, this.layout.id === 'stronghold' ? .025 : .17, 4.8);
       this.requestDraw();
     }
 
@@ -887,7 +937,7 @@
       let best = Infinity;
       let id = null;
       for (const room of this.frame.rooms) {
-        if (!onLevel(room, this.level)) continue;
+        if (!this.roomVisible(room)) continue;
         const distance = roomHit(camera.eye, ray, room);
         if (distance < best) { best = distance; id = room.id; }
       }
@@ -950,12 +1000,8 @@
         const hit = this.mapRooms?.findLast(({ left, top, w, h }) => event.offsetX >= left - 2 && event.offsetX <= left + w + 2 && event.offsetY >= top - 2 && event.offsetY <= top + h + 2);
         if (!hit) return;
         const room = this.frame.rooms[hit.id];
-        if (this.mode === 'orbit') {
-          this.orbit.target = [room.x, room.y + room.h / 2, room.z];
-          this.orbit.zoom = .48;
-        } else this.fly.eye = [room.x, room.y + 1.52, room.z];
         this.onSelect(hit.id);
-        this.requestDraw();
+        this.focusRoom(room);
       });
       for (const button of this.flyOverlay.querySelectorAll('[data-move]')) {
         button.addEventListener('pointerdown', (event) => {

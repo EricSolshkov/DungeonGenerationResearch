@@ -10,10 +10,6 @@
       stone: '#78837d', floor: '#838e85', mortar: '#46524f', foundation: '#465257',
       aged: '#718d7d', trim: '#a66f50', patina: '#5c9e90', metal: '#53636a', light: '#e9bf82',
     },
-    stronghold: {
-      stone: '#747d84', floor: '#828b84', mortar: '#444c54', foundation: '#434d59',
-      aged: '#647a60', trim: '#8b978c', patina: '#6f826d', metal: '#596376', light: '#d9b47e',
-    },
   };
   for (const material of Object.values(materials)) {
     for (const key of Object.keys(material)) material[key] = rgb(material[key]);
@@ -21,7 +17,6 @@
   const gold = rgb(portalRoute.color);
   const wood = rgb('#78583e');
   const board = rgb('#a57b55');
-  const books = ['#a87f66', '#6d887d', '#8c5b62', '#aa916c', '#71768d'].map(rgb);
 
   function variation(x, y, z) {
     const hash = Math.imul(Math.round(x * 16), 73856093) ^ Math.imul(Math.round(y * 16), 19349663) ^ Math.imul(Math.round(z * 16), 83492791);
@@ -189,66 +184,6 @@
     } else if (room.template === '窄储藏间') crate(box, -wide * .24, long * .16, material);
   }
 
-  function portalPlatform(box, material) {
-    const ring = rgb('#628d84');
-    const pillar = rgb('#77668e');
-    const center = .77;
-    box(0, center, 4.34, 4.02, 0, .48, pillar);
-    box(0, center - 2.3, 2.4, .58, 0, .21, material.stone);
-    box(0, center - 1.98, 2.64, .49, 0, .33, material.trim);
-    box(0, center, 3.18, 3.13, .48, .552, rgb('#523b71'));
-    for (const side of [-1, 1]) {
-      for (const part of [-1, 0, 1]) {
-        box(side * 1.78, center + part * 1.17, .37, 1.13, .48, .88, ring);
-        box(part * 1.17, center + side * 1.78, 1.13, .37, .48, .88, ring);
-      }
-      box(side * 1.78, center - 1.78, .43, .43, .48, .95, material.trim);
-      box(side * 1.78, center + 1.78, .43, .43, .48, .95, material.trim);
-    }
-    box(0, center, 1.41, .12, .552, .573, pillar);
-    box(0, center, .12, 1.41, .552, .573, pillar);
-  }
-
-  function strongholdDecorations(room, { box, wide, long }, material) {
-    if (room.role === 'portal') {
-      portalPlatform(box, material);
-    } else if (room.role === 'library') {
-      const span = long * .62;
-      for (const side of [-1, 1]) {
-        const across = side * (wide / 2 - .86);
-        box(across, 0, .57, span + .22, 0, 2.31, wood);
-        for (let tier = 0; tier < 3; tier += 1) {
-          const base = .26 + .64 * tier;
-          box(across, 0, .74, span + .36, base, base + .085, board);
-          for (let index = 0; index < 7; index += 1) {
-            const forward = (index / 6 - .5) * span * .93;
-            const height = .29 + .09 * ((index + tier) % 3);
-            box(across - side * .27, forward, .13, span * .105, base + .085, base + height, books[(tier * 2 + index) % books.length]);
-          }
-        }
-      }
-    } else if (room.template === '监牢') {
-      const across = wide * .21;
-      for (let index = -3; index <= 3; index += 1) {
-        box(across, index * .43, .071, .079, .09, 2.14, material.metal);
-      }
-      for (const band of [.13, 1.05, 2.10]) box(across, 0, .11, 2.83, band, band + .096, material.metal);
-      box(across + .41, 1.46, .89, .22, 0, 2.25, material.stone);
-    } else if (room.template === '储藏室') {
-      crate(box, wide * .26, long * .22, material);
-      crate(box, wide * .26, long * .04, material);
-    } else if (room.template.endsWith('厅')) {
-      for (const across of [-1, 1]) {
-        for (const forward of [-1, 1]) {
-          const x = across * (wide / 2 - .73);
-          const z = forward * (long / 2 - .78);
-          box(x, z, .68, .68, 0, .25, material.stone);
-          box(x, z, .38, .38, .25, .94, material.trim);
-          box(x, z, .28, .28, .94, 1.05, material.light);
-        }
-      }
-    }
-  }
 
   function floorInlay(mesh, room, doors, material) {
     const color = rgba(room.role === 'normal' ? material.patina : rgb(roles[room.role].color), .81);
@@ -267,16 +202,21 @@
   }
 
   function addRoom(mesh, room, doors, id, cutaway) {
+    if (id === 'stronghold') {
+      globalThis.DungeonStrongholdMesh.addRoom(mesh, room, cutaway);
+      return;
+    }
     const material = materials[id];
     layFloor(mesh, room, material);
     buildWalls(mesh, room, doors, material, cutaway);
     floorInlay(mesh, room, doors, material);
     const fixture = roomFixture(mesh, room);
-    if (id === 'stronghold') strongholdDecorations(room, fixture, material);
-    else trialDecorations(room, fixture, material);
+    trialDecorations(room, fixture, material);
   }
 
   function addPassage(mesh, [start, end], id, cutaway, highlighted) {
+    // Stronghold pieces meet at their boundary; both sides already include the threshold.
+    if (id === 'stronghold') return;
     const material = materials[id];
     const alongX = start[0] !== end[0];
     const axis = alongX ? 0 : 2;

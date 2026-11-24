@@ -178,6 +178,17 @@ p, h1, h2, h3, ol, dl, dd { margin: 0; }
 .inspector-room span { font-size: .875rem; color: #dce1f6; }
 .room-detail { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0; font-size: .8125rem; color: #d5ddf5; line-height: 1.46; }
 .room-detail dt { color: #a0aecb; }
+.piece-tools { display: flex; gap: 6px; margin-top: 10px; }
+.piece-tools .select-wrap { flex: 1; min-width: 0; }
+.piece-tools select { width: 100%; }
+.piece-tools .button { height: 34px; padding-inline: 9px; white-space: nowrap; font-size: .8125rem; }
+.piece-tools .button[aria-pressed="true"] { background: #33304e; border-color: #9f8bdd; }
+.port-list { margin-top: 10px; border-top: 1px solid #30394e; }
+.port-list h3 { margin: 9px 0 3px; font-size: .875rem; }
+.port-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 6px; align-items: center; padding: 5px 0; border-bottom: 1px solid #232d41; font-size: .8125rem; }
+.port-row small { grid-column: 1 / -1; font: .75rem var(--mono); color: var(--muted); }
+.port-row button { color: #c4b6ff; background: #27223d; padding: 2px 6px; border: 1px solid #48405f; border-radius: 4px; }
+.port-state { color: var(--muted); }
 
 .lab.is-comparing { grid-template-columns: 218px minmax(0, 1fr); }
 .lab.is-comparing .sidebar { grid-row: span 2; }

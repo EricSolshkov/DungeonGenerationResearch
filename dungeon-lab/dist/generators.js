@@ -32,14 +32,18 @@
     stronghold: {
       title: 'Minecraft', variant: '要塞', group: 'minecraft', accent: '#aac3ec',
       projection: 'space', view: '多层剖面',
-      summary: '用自制片段和缩小的规模模拟 Java 版要塞内部的生成。由起始楼梯扩张，按权重选取房间，找不到传送门房时重新生成。',
+      summary: '按 Java 版 1.17.1 的片段尺寸、门位和抽取规则，从螺旋楼梯扩建要塞。输入的是实验室布局种子，坐标以起始楼梯底面为高度零点。',
       phases: [
-        ['安置起始楼梯', '抽取起始朝向，用下行楼梯接入交叉厅。'],
-        ['拓展走廊与楼层', '随机选取待扩展片段，从门位按权重试放新片段，排除空间重叠。'],
-        ['追踪传送门路线', '从末地传送门房沿已记录的连接回溯到起点。'],
-        ['开通门洞与楼梯', '逐个打开门位，让横向走廊和跨层楼梯形成可漫游的路线。'],
+        ['安置起始楼梯', '随机选择朝向，从楼梯底部优先接入五向交叉厅。'],
+        ['逐门扩建', '随机取出待扩建片段，从启用的门位试放。常规候选失败时，检查能否放置填充短廊。'],
+        ['追踪传送门路线', '沿父子片段回溯到入口，检查生成树上是否有被墙挡住的门位。'],
+        ['检查对接结果', '汇总已配对的门位、终止扩建的出口与入口至传送门的距离。'],
       ],
-      sources: [['Mojang · 要塞（Stronghold）', 'https://www.minecraft.net/en-us/article/stronghold']],
+      sources: [
+        ['Mojang · Java 版 1.17.1', 'https://www.minecraft.net/en-us/article/minecraft-java-edition-1-17-1'],
+        ['Fabric Yarn · Java 1.17.1 要塞片段', 'https://maven.fabricmc.net/docs/yarn-1.17.1+build.64/net/minecraft/structure/StrongholdGenerator.html'],
+        ['FeatureUtils · 要塞片段选择与回退', 'https://github.com/KaptainWutax/FeatureUtils/blob/master/src/main/java/kaptainwutax/featureutils/structure/generator/structure/StrongholdGenerator.java'],
+      ],
     },
     isaac: {
       title: '以撒的结合', short: '网格队列生长', accent: '#b6a0ff', icon: 'grid',
@@ -133,6 +137,7 @@
   }
 
   function connectionPath(a, b, edge, projection) {
+    if (edge.aPoint && edge.bPoint) return [edge.aPoint, edge.bPoint];
     const start = port(a, edge.aSide);
     const end = port(b, edge.bSide);
     if (projection === 'side' && start[0] !== end[0] && start[1] !== end[1]) {
@@ -378,104 +383,232 @@
   const neighbors = ({ x, z }) => directions.map((side) => ({ x: x + offsets[side][0], z: z + offsets[side][1], side }));
   const onGrid = ({ x, z }) => x >= -4 && x <= 4 && z >= -4 && z <= 4;
 
-  const strongholdFloorHeight = 5.6;
-  const strongholdPieces = [
-    { name: '直走廊', weight: 40, w: 3.9, d: 6.1, h: 2.65, exits: [0] },
-    { name: '左转走廊', weight: 20, w: 4.1, d: 4.2, h: 2.65, exits: [3] },
-    { name: '右转走廊', weight: 20, w: 4.1, d: 4.2, h: 2.65, exits: [1] },
-    { name: '分岔厅', weight: 10, limit: 6, w: 7.1, d: 6.4, h: 3.15, exits: [0, 3, 1] },
-    { name: '监牢', weight: 5, limit: 5, w: 6.5, d: 5.9, h: 3.05, exits: [0] },
-    { name: '下行楼梯', weight: 7, limit: 5, drop: 1, w: 4.6, d: 3.8, h: 2.8, exits: [0] },
-    { name: '下层交叉厅', weight: 5, limit: 4, drop: 1, w: 6.8, d: 6.7, h: 3.5, exits: [0, 1, 3] },
-    { name: '储藏室', weight: 5, limit: 4, w: 4.9, d: 6, h: 2.9, exits: [0] },
-    { name: '图书馆', role: 'library', weight: 10, limit: 2, minDepth: 5, w: 8.4, d: 9.6, h: 4, exits: [] },
-    { name: '末地传送门房', role: 'portal', weight: 20, limit: 1, minDepth: 6, w: 8.1, d: 9.3, h: 3.9, exits: [] },
-  ];
-
-  function growStronghold(layout, random, attempt, retryReason) {
-    const initialSide = pick(directions, random);
-    const start = layout.add(0, 0, 0, 'start', { w: 4.6, d: 4.6, h: 3.15, level: 0, depth: 0, shell: true, template: '起始楼梯', facing: initialSide });
-    const volumes = [box(start)];
-    const pending = [];
-    const placed = new Map();
-    const budget = 24 + Math.floor(random() * 6);
-    let previousPiece = null;
-
-    layout.record(0, attempt === 1 ? '安置起始楼梯，选择一个下行方向。' : `第 ${attempt} 次布局。上一轮${retryReason}，重新从起始楼梯扩展。`, start.id);
-
-    function attach(parent, side, piece, phase, showRejection) {
-      const [dx, dz] = offsets[side];
-      const w = dx ? piece.d : piece.w;
-      const d = dx ? piece.w : piece.d;
-      const level = parent.level + (piece.drop ?? 0);
-      const gap = piece.drop ? 7.6 : 1.35;
-      const candidate = {
-        x: parent.x + dx * ((parent.w + w) / 2 + gap),
-        z: parent.z + dz * ((parent.d + d) / 2 + gap),
-        y: -level * strongholdFloorHeight, w, d, h: piece.h, level,
-      };
-      if (Math.max(Math.abs(candidate.x), Math.abs(candidate.z)) > 62) return null;
-      const end = { aSide: side, bSide: opposite[side] };
-      const roomVolume = box(candidate);
-      const passage = connectorVolume(parent, candidate, end);
-      if (volumes.some((occupied) => intersects(roomVolume, occupied) || intersects(passage, occupied))) {
-        if (showRejection) layout.record(phase, `「${piece.name}」与已放置的片段或通道相交，改试其他片段。`, parent.id, candidate);
-        return null;
-      }
-      const room = layout.add(candidate.x, candidate.y, candidate.z, piece.role, {
-        ...candidate, facing: side, shell: true, parent: parent.id, depth: parent.depth + 1, template: piece.name,
+  // Stronghold pieces and connector records are immutable after insertion. Copy the
+  // arrays per frame and replace the few records whose state changes during replay.
+  class StrongholdLayout extends Layout {
+    record(phase, message, focus = null, candidate = null, focusPort = null) {
+      this.frames.push({
+        phase, message, focus, candidate, focusPort,
+        rooms: this.rooms.slice(), edges: this.edges.slice(), ports: this.ports.slice(),
       });
-      layout.join(parent, room, end);
-      volumes.push(roomVolume, passage);
-      placed.set(piece, (placed.get(piece) ?? 0) + 1);
-      previousPiece = piece;
-      if (piece.exits.length) pending.push({ room, exits: piece.exits });
-      const destination = `${label(room)}「${piece.name}」`;
-      const message = piece.drop ? `${label(parent)} 经下行楼梯接入第 ${level + 1} 层的 ${destination}。` : `${label(parent)} 接入 ${destination}。`;
-      layout.record(phase, message, room.id);
-      return room;
+    }
+  }
+
+  const strongholdBox = (r) => [r.x - r.w / 2, r.y, r.z - r.d / 2, r.x + r.w / 2, r.y + r.h, r.z + r.d / 2];
+  const localPort = (c) => [c.x, c.y, c.z];
+  const sideNames = { n: '北', e: '东', s: '南', w: '西' };
+
+  function growStronghold(layout, random, attempt) {
+    const { pieces, pool, instantiate, worldPoint, worldSide } = globalThis.StrongholdTemplates;
+    const facing = pick(directions, random);
+    const start = layout.add(2.5, 0, 2.5, 'start', {
+      ...instantiate('start', random, { facing }), facing, w: 5, h: 11, d: 5,
+      entryY: 7, level: 0, depth: 0, shell: true,
+    });
+    const volumes = [strongholdBox(start)];
+    const counts = new Map();
+    const pending = [];
+    const portIndices = new Map();
+    let previous = null;
+
+    function collisionIndex(room) {
+      const bounds = strongholdBox(room);
+      return volumes.findIndex((volume) => intersects(bounds, volume));
     }
 
-    attach(start, initialSide, { name: '起始交叉厅', w: 7.8, d: 7.2, h: 3.45, drop: 1, exits: [0, 1, 3] }, 0, false);
+    function registerPorts(room) {
+      const indices = [];
+      for (const c of room.connectors) {
+        const state = c.id === 'entry' ? (room.parent === undefined ? 'entrance' : 'matched')
+          : !c.active ? 'inactive' : room.templateId === 'filler' ? 'terminal' : 'waiting';
+        const entry = {
+          room: room.id, id: c.id, label: c.label, side: worldSide(room.facing, c.side),
+          local: localPort(c), point: worldPoint(room, localPort(c)), state, hasOpening: c.hasOpening,
+        };
+        indices.push(layout.ports.length);
+        layout.ports.push(entry);
+      }
+      portIndices.set(room.id, indices);
+    }
 
-    while (pending.length && layout.rooms.length < budget) {
-      const [{ room, exits }] = pending.splice(Math.floor(random() * pending.length), 1);
-      if (room.depth >= 13) continue;
-      for (const turn of shuffled(exits, random)) {
-        if (layout.rooms.length >= budget) break;
-        const pieces = strongholdPieces.filter((piece) => piece !== previousPiece &&
-          room.depth + 1 >= (piece.minDepth ?? 0) && (placed.get(piece) ?? 0) < (piece.limit ?? Infinity) &&
-          room.level + (piece.drop ?? 0) < 3);
-        const side = rotate(room.facing, turn);
-        const options = weightedOrder(pieces, random);
-        for (const [index, piece] of options.entries()) {
-          if (attach(room, side, piece, 1, index === 0)) break;
+    registerPorts(start);
+    layout.record(0, (attempt > 1 ? `前 ${attempt - 1} 次布局没有传送门房，重新生成。` : '') +
+      `起始螺旋楼梯朝${sideNames[facing]}，从 Y=7 的上门降至 Y=1 的前门。`, start.id);
+
+    // Work with continuous block faces, so neighbouring voxel boxes touch exactly.
+    // Only accepted pieces draw random numbers for their doors, variants and exits.
+    function align(piece, exit, options) {
+      const lateral = exit.side === 'e' || exit.side === 'w';
+      const d = options.length ?? piece.d;
+      const h = options.short ? 6 : piece.h;
+      const candidate = {
+        x: 0, y: 0, z: 0, facing: exit.side, w: lateral ? d : piece.w, d: lateral ? piece.w : d, h,
+        localW: piece.w, localH: h, localD: d,
+      };
+      const entry = piece.connectors.find((c) => c.id === 'entry');
+      const point = worldPoint(candidate, localPort(entry));
+      [candidate.x, candidate.y, candidate.z] = exit.point.map((v, i) => v - point[i]);
+      candidate.level = Math.floor((start.entryY - exit.point[1]) / 6);
+      return candidate;
+    }
+
+    function extend(parent, index) {
+      const exit = layout.ports[index];
+      const phase = parent === start ? 0 : 1;
+      const depth = parent.depth + 1;
+      const [x, y, z] = exit.point;
+      let reported = false;
+
+      function skip(reason, piece, candidate) {
+        if (reported) return;
+        reported = true;
+        const prefix = piece ? `试放「${piece.name}」` : '';
+        layout.record(phase, `${label(parent)} · ${exit.label}（Y=${y}）${prefix}${reason}。`, parent.id, candidate, exit);
+      }
+
+      function place(piece, candidate, options = {}, contactRoom) {
+        const data = instantiate(piece.id, random, { ...options, facing: exit.side });
+        const role = piece.id === 'portal' ? 'portal' : piece.id === 'library' ? 'library' : 'normal';
+        const room = layout.add(candidate.x, candidate.y, candidate.z, role, {
+          ...candidate, ...data, depth, parent: parent.id, shell: true, entryY: y,
+          ...(contactRoom === undefined ? {} : { contactRoom }),
+        });
+        const entry = room.connectors.find((c) => c.id === 'entry');
+        layout.join(parent, room, {
+          aSide: exit.side, bSide: opposite[exit.side], aConnectorId: exit.id, bConnectorId: entry.id,
+          aPoint: exit.point, bPoint: worldPoint(room, localPort(entry)), doorType: room.doorType,
+          obstructed: exit.hasOpening === false, open: true,
+        });
+        const matched = { ...exit, state: 'matched' };
+        layout.ports[index] = matched;
+        registerPorts(room);
+        volumes.push(strongholdBox(room));
+        pending.push(room);
+        const prefix = parent === start ? '优先试放五向交叉厅。' : '';
+        let annotation = '';
+        if (room.templateId === 'filler') annotation = ` 五次抽取后回退，短廊长 ${room.localD} 格，尽头接近 ${label(layout.rooms[contactRoom])} 的墙面。`;
+        else if (options.short) annotation = ' 双层高度受阻，改放单层图书馆。';
+        else if (room.templateId === 'straight' || room.templateId === 'fiveCrossing') {
+          const exits = room.connectors.filter((c) => c.id !== 'entry');
+          annotation = ` 本次启用 ${exits.filter((c) => c.active).length}/${exits.length} 个出口。`;
+        }
+        layout.record(phase, `${prefix}${label(parent)} 的${exit.label}（${exit.local.join(', ')}）接入朝${sideNames[room.facing]}的 ${label(room)}「${room.template}」，门槛 Y=${y}。${annotation}`, room.id, null, matched);
+      }
+
+      function tryPiece(piece) {
+        const options = {};
+        let candidate = align(piece, exit, options);
+        // The unshifted source stair starts at game Y=64 in Java 1.17.1.
+        if (candidate.y + 64 <= 10) {
+          skip('低于片段生成高度', piece, candidate);
+          return false;
+        }
+        let occupied = collisionIndex(candidate);
+        if (occupied >= 0 && piece.id === 'library') {
+          options.short = true;
+          candidate = align(piece, exit, options);
+          occupied = collisionIndex(candidate);
+        }
+        if (occupied >= 0) {
+          skip(`与 ${label(layout.rooms[occupied])} 重叠，继续筛选`, piece, candidate);
+          return false;
+        }
+        place(piece, candidate, options);
+        return true;
+      }
+
+      function tryFiller() {
+        const piece = pieces.filler;
+        const probe = align(piece, exit, { length: 4 });
+        const contact = collisionIndex(probe);
+        if (contact < 0 || volumes[contact][1] !== probe.y || probe.y + 64 <= 1) return false;
+        for (let length = 3; length >= 2; length -= 1) {
+          const prefix = align(piece, exit, { length: length - 1 });
+          if (intersects(strongholdBox(prefix), volumes[contact])) continue;
+          // Vanilla permits the last slice to reach the target wall. Wall contact
+          // alone does not prove that the two interiors are traversable.
+          place(piece, align(piece, exit, { length }), { length }, contact);
+          return true;
+        }
+        return false;
+      }
+
+      // Vanilla tests the next piece's doorway anchor (the first block in its
+      // three-wide opening) against the source stair's minimum X/Z.
+      const footX = exit.side === 'e' ? x : exit.side === 'w' ? x - 1 : x - 1.5;
+      const footZ = exit.side === 's' ? z : exit.side === 'n' ? z - 1 : z - 1.5;
+      let stop;
+      if (parent.depth > 50) stop = '父片段已超过第 50 代';
+      else if (Math.abs(footX - volumes[0][0]) > 112 || Math.abs(footZ - volumes[0][2]) > 112) stop = '门位超出起点水平 112 格的范围';
+      else {
+        const available = pool.filter((p) => (counts.get(p.id) ?? 0) < p.maxCount);
+        if (!available.some((p) => Number.isFinite(p.maxCount))) stop = '有次数上限的片段均已用尽';
+        else {
+          // The imposed first crossing does not consume a weighted pool slot.
+          if (parent === start && tryPiece(pieces.fiveCrossing)) return;
+          const total = available.reduce((sum, p) => sum + p.weight, 0);
+          for (let draw = 0; draw < 5; draw += 1) {
+            let ticket = Math.floor(random() * total);
+            for (const p of available) {
+              ticket -= p.weight;
+              if (ticket >= 0) continue;
+              if (p === previous || depth < p.minDepth) {
+                const reason = p === previous ? '与上一个加权选中的类型相同，重新抽取'
+                  : `需要第 ${p.minDepth} 代才能出现，当前为第 ${depth} 代`;
+                skip(reason, p);
+                break;
+              }
+              if (tryPiece(p)) {
+                counts.set(p.id, (counts.get(p.id) ?? 0) + 1);
+                previous = p;
+                return;
+              }
+              // A colliding candidate falls through to the next pool entry.
+            }
+          }
+          if (tryFiller()) return;
+          stop = '五次加权抽取均未放置片段，附近也没有合适的填充短廊位置';
         }
       }
+      const capped = { ...exit, state: 'capped' };
+      layout.ports[index] = capped;
+      layout.record(phase, `${label(parent)} · ${exit.label}结束扩建。${stop}。`, parent.id, null, capped);
+    }
+
+    function extendRoom(room) {
+      for (const index of portIndices.get(room.id)) {
+        if (layout.ports[index].state === 'waiting') extend(room, index);
+      }
+    }
+    extendRoom(start);
+    while (pending.length) {
+      const [room] = pending.splice(Math.floor(random() * pending.length), 1);
+      extendRoom(room);
     }
   }
 
   function buildStronghold(layout, random) {
-    let retryReason = '';
     for (let attempt = 1; ; attempt += 1) {
-      const trial = new Layout(layout.id);
-      growStronghold(trial, random, attempt, retryReason);
+      const trial = new StrongholdLayout(layout.id);
+      growStronghold(trial, random, attempt);
       const portal = trial.rooms.find((room) => room.role === 'portal');
-      if (!portal || trial.rooms.length < 18 || !trial.rooms.some((room) => room.level === 2)) {
-        if (!portal) retryReason = '未找到传送门房';
-        else if (trial.rooms.length < 18) retryReason = '片段数量低于演示规模';
-        else retryReason = '未扩张到第三层';
-        continue;
+      if (!portal) continue;
+      trial.record(2, `找到 ${label(portal)}「${portal.template}」，门槛位于 Y=${portal.entryY}，沿父片段回溯。`, portal.id);
+      let obstructed = 0;
+      for (let next = portal; next.parent !== undefined; next = trial.rooms[next.parent]) {
+        const edgeIndex = next.id - 1; // Every accepted child appends exactly one edge.
+        const edge = trial.edges[edgeIndex];
+        trial.edges[edgeIndex] = { ...edge, toPortal: true };
+        const parent = trial.rooms[next.parent];
+        const door = parent.connectors.find((c) => c.id === edge.aConnectorId);
+        if (edge.obstructed) obstructed += 1;
+        const barrier = edge.obstructed ? ' 此处有子片段，但五向交叉厅的墙面没有对应开口。' : '';
+        trial.record(2, `从 ${label(next)} 的入口回到 ${label(parent)} 的${door.label}（Y=${edge.aPoint[1]}）。${barrier}`, parent.id);
       }
+      const capped = trial.ports.filter((p) => p.state === 'capped').length;
+      const barrier = obstructed ? `，其中 ${obstructed} 处被墙面阻隔` : '';
+      trial.record(3, `要塞共 ${trial.rooms.length} 个片段，${trial.edges.length} 对门位相接，${capped} 个启用的出口终止扩建。入口到传送门的生成树路线经过 ${portal.depth} 次连接${barrier}。`, portal.id);
       Object.assign(layout, trial);
-      layout.record(2, `找到第 ${portal.level + 1} 层的末地传送门房 ${label(portal)}，沿连接回溯。`, portal.id);
-      for (let next = portal; next.parent !== undefined; next = layout.rooms[next.parent]) {
-        const path = layout.edges.find((edge) => edge.b === next.id);
-        path.toPortal = true;
-        const parent = layout.rooms[next.parent];
-        layout.record(2, `路线经过 ${label(parent)} 与 ${label(next)} 之间的${parent.level === next.level ? '通道' : '楼梯'}。`, parent.id);
-      }
-      layout.open(3, `要塞连通，末地传送门位于第 ${portal.level + 1} 层，距入口 ${portal.depth} 段连接。`);
       return;
     }
   }

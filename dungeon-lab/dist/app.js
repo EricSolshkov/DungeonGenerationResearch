@@ -14,8 +14,13 @@
   const pad = (number) => String(number).padStart(2, '0');
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const metrics = [['rooms', '房间数'], ['doors', '连接数'], ['branches', '分岔点'], ['loops', '环路数']];
-  const levelMetrics = [['floors', '楼层数'], ['stairs', '跨层楼梯']];
+  const strongholdMetrics = [['heights', '门槛标高数'], ['stairPieces', '楼梯片段']];
   const moveKeys = new Set(['w', 'a', 's', 'd', 'q', 'e']);
+  const { doorHeights } = globalThis.StrongholdTemplates;
+  const compass = { n: '北', e: '东', s: '南', w: '西' };
+  const portStates = { entrance: '起始入口', matched: '已连接', waiting: '待扩展', capped: '扩展结束', inactive: '未启用', terminal: '短廊末端' };
+  const onHeight = (room, height) => height === null || doorHeights(room).includes(height);
+  const heightsOf = (rooms) => [...new Set(rooms.flatMap(doorHeights))].sort((a, b) => b - a);
   const sceneLabel = (algorithm, mode) => algorithm.projection === 'space' && mode === 'fly' ? '室内漫游' : algorithm.view;
   const view = {
     lab: byId('lab'), workbench: byId('workbench'), panes: byId('panes'),
@@ -25,9 +30,13 @@
     first: byId('first-step'), prev: byId('prev-step'), next: byId('next-step'), play: byId('play'),
     compare: byId('compare-button'), orbit: byId('orbit-button'), fly: byId('fly-button'), full: byId('fullscreen'),
     legend: byId('legend'), hint: byId('view-hint'), guide: byId('guide'),
+    pieceTools: byId('piece-tools'), pieceSelect: byId('piece-select'), pieceFocus: byId('piece-focus'),
   };
 
   const state = { seed: view.seed.value, algorithms: ['dead', 'minecraft'], minecraft: 'minecraft', comparing: false, active: 0, cursor: 0, speed: 1, timer: null };
+  if (location.hash === '#stronghold') {
+    state.algorithms[0] = state.minecraft = 'stronghold';
+  }
   let timeline = [];
   let cache = new Map();
   let renderedPhases = '';
@@ -39,7 +48,7 @@
     const levelSelect = root.querySelector('.level-select');
     const algorithmName = root.querySelector('.pane-algorithm');
     const pane = {
-      root, select, levelSelect, algorithmName, selected: null, frame: null, layout: null, level: null,
+      root, select, levelSelect, algorithmName, selected: null, frame: null, layout: null, level: null, isolated: false,
       compareTitle: root.querySelector('.compare-title'), phase: root.querySelector('.pane-phase'),
       event: root.querySelector('.compare-event'), badge: root.querySelector('.stage-badge span'),
       mapTitle: root.querySelector('.minimap-title span'),
@@ -52,6 +61,7 @@
     levelSelect.addEventListener('change', () => {
       activate(index);
       pane.level = levelSelect.value === '' ? null : Number(levelSelect.value);
+      pane.isolated = false;
       updateScene(index);
       renderInspector();
     });
@@ -60,6 +70,7 @@
     root.hidden = index > 0;
     pane.scene = new globalThis.DungeonScene(root, () => activate(index), (id) => {
       pane.selected = id;
+      if (id === null) pane.isolated = false;
       updateScene(index);
       renderInspector();
     });
@@ -124,27 +135,36 @@
     if (pane.layout !== layout) {
       pane.layout = layout;
       pane.level = null;
+      pane.isolated = false;
       pane.root.classList.toggle('stronghold-pane', id === 'stronghold');
       pane.levelSelect.parentElement.hidden = id !== 'stronghold';
       if (id === 'stronghold') {
-        const floors = [...new Set(layout.final.rooms.map((room) => room.level))];
-        pane.levelSelect.innerHTML = '<option value="">全部楼层</option>' + floors.map((level) =>
-          `<option value="${level}">第 ${level + 1} 层</option>`).join('');
+        const heights = heightsOf(layout.final.rooms);
+        pane.levelSelect.innerHTML = '<option value="">全部标高</option>' + heights.map((height) =>
+          `<option value="${height}">门槛 Y = ${height}</option>`).join('');
       }
     }
     if (id === 'stronghold') {
-      const present = new Set(frame.rooms.map((room) => room.level));
+      const present = new Set(heightsOf(frame.rooms));
       if (!present.has(pane.level)) pane.level = null;
       for (const option of pane.levelSelect.options) option.disabled = option.value !== '' && !present.has(Number(option.value));
       pane.levelSelect.value = pane.level ?? '';
     }
-    if (!frame.rooms.some((room) => room.id === pane.selected && (pane.level === null || room.level === pane.level))) pane.selected = null;
+    if (!frame.rooms.some((room) => room.id === pane.selected && onHeight(room, pane.level))) {
+      pane.selected = null;
+      pane.isolated = false;
+    }
     pane.frame = frame;
-    pane.badge.textContent = sceneLabel(template, pane.scene.mode);
+    pane.badge.textContent = viewLabel(pane, template);
     pane.mapTitle.textContent = template.projection === 'side' ? '侧视小地图' : '俯视小地图';
-    pane.scene.setLayout(layout, frame, pane.selected, state.cursor < timeline.length - 1, pane.level);
+    pane.scene.setLayout(layout, frame, pane.selected, state.cursor < timeline.length - 1, pane.level, pane.isolated);
     pane.phase.textContent = template.phases[frame.phase][0];
     pane.event.textContent = frame.message;
+  }
+
+  function viewLabel(pane, algorithm) {
+    const mode = pane.isolated && pane.scene.mode === 'orbit' ? '片段剖面' : sceneLabel(algorithm, pane.scene.mode);
+    return pane.layout.id === 'stronghold' ? `Java 1.17.1 · ${mode}` : mode;
   }
 
   function renderWorkspace() {
@@ -198,22 +218,23 @@
 
   function frameStats({ frame, layout }) {
     const counts = stats(frame);
-    if (layout.projection !== 'space') return counts;
-    const floors = new Set(frame.rooms.map((room) => room.y)).size;
-    const stairs = frame.edges.filter(({ a, b }) => frame.rooms[a].y !== frame.rooms[b].y).length;
-    return { ...counts, floors, stairs };
+    if (layout.id === 'stronghold') {
+      const stairPieces = frame.rooms.filter((room) => ['start', 'straightStairs', 'spiralStairs'].includes(room.templateId)).length;
+      return { ...counts, heights: heightsOf(frame.rooms).length, stairPieces };
+    }
+    return counts;
   }
 
   function renderStats() {
     const left = frameStats(panes[0]);
     if (!state.comparing) {
-      const shown = state.algorithms[0] === 'stronghold' ? [...metrics.slice(0, 2), ...levelMetrics] : metrics;
+      const shown = state.algorithms[0] === 'stronghold' ? [['rooms', '结构片段'], metrics[1], ...strongholdMetrics] : metrics;
       view.stats.innerHTML = `<div class="stats-grid">${shown.map(([key, name]) => `<div class="stat"><strong>${pad(left[key])}</strong><span>${name}</span></div>`).join('')}</div>`;
       return;
     }
     const right = frameStats(panes[1]);
     const titles = state.algorithms.map(nameOf);
-    const shown = state.algorithms.includes('stronghold') ? [...metrics, ...levelMetrics] : metrics;
+    const shown = state.algorithms.includes('stronghold') ? [...metrics, ...strongholdMetrics] : metrics;
     const number = (value) => value === undefined ? '—' : pad(value);
     view.stats.innerHTML = `<table class="compare-stats" aria-label="两种算法的布局统计"><thead><tr><th scope="col">指标</th><th scope="col" title="${titles[0]}" aria-label="${titles[0]}">左侧</th><th scope="col" title="${titles[1]}" aria-label="${titles[1]}">右侧</th></tr></thead>
       <tbody>${shown.map(([key, name]) => `<tr><th scope="row">${name}</th><td>${number(left[key])}</td><td>${number(right[key])}</td></tr>`).join('')}</tbody></table>`;
@@ -243,11 +264,51 @@
   function renderInspector() {
     const pane = panes[state.active];
     const room = pane.frame?.rooms.find((entry) => entry.id === pane.selected);
+    const stronghold = pane.layout?.id === 'stronghold';
+    view.pieceTools.hidden = !stronghold;
+    if (stronghold) {
+      const groups = new Map();
+      for (const item of pane.frame.rooms.filter((item) => onHeight(item, pane.level))) {
+        if (!groups.has(item.template)) groups.set(item.template, []);
+        groups.get(item.template).push(`<option value="${item.id}">${label(item)} · ${item.variantName || item.template}</option>`);
+      }
+      const options = '<option value="">选择要塞片段…</option>' + [...groups].map(([name, items]) =>
+        `<optgroup label="${name}">${items.join('')}</optgroup>`).join('');
+      if (view.pieceSelect.innerHTML !== options) view.pieceSelect.innerHTML = options;
+      view.pieceSelect.value = room?.id ?? '';
+      view.pieceFocus.disabled = !room;
+      view.pieceFocus.setAttribute('aria-pressed', String(pane.isolated));
+      view.pieceFocus.textContent = pane.isolated ? '返回布局' : '单独查看';
+    }
     if (!room) {
-      if (!view.inspector.querySelector('.empty-inspector')) view.inspector.innerHTML = '<p class="empty-inspector">点击房间或小地图，查看尺寸与连接。</p>';
+      view.inspector.innerHTML = stronghold
+        ? '<p class="empty-inspector">点选地图上的片段，或从上方选择，查看门位与相邻片段。</p>'
+        : '<p class="empty-inspector">点击房间或小地图，查看尺寸与连接。</p>';
       return;
     }
     const links = pane.frame.edges.filter((edge) => edge.a === room.id || edge.b === room.id);
+    if (stronghold) {
+      const doorTypes = { open: '敞口', iron: '铁门', wood: '木门', grates: '铁栏开口' };
+      const ports = pane.frame.ports.filter((p) => p.room === room.id);
+      const rows = ports.map((p) => {
+        const edge = links.find((e) => (e.a === room.id ? e.aConnectorId : e.bConnectorId) === p.id);
+        const to = edge && pane.frame.rooms[edge.a === room.id ? edge.b : edge.a];
+        const wall = edge?.obstructed ? ' · 墙体阻断' : p.state === 'inactive' && p.hasOpening ? ' · 墙上有开口' : '';
+        const stateText = `${portStates[p.state]}${wall}`;
+        const action = to ? `<button type="button" data-neighbor="${to.id}" title="查看${to.template}">${label(to)}</button>` : '';
+        return `<div class="port-row"><span>${p.label} · ${compass[p.side]}</span>${action}
+          <small>局部 (${p.local.join(', ')}) · Y=${p.point[1]}<br>${stateText}</small></div>`;
+      }).join('');
+      const role = roles[room.role];
+      view.inspector.innerHTML = `<div class="inspector-room" style="--role-color:${role.color}"><strong>${label(room)}</strong><span>${room.template}</span></div>
+        <dl class="room-detail"><dt>模板尺寸</dt><dd>${room.localW} × ${room.localH} × ${room.localD} 格</dd>
+        <dt>朝向 / 深度</dt><dd>${compass[room.facing]} / 第 ${room.depth} 代</dd>
+        <dt>入口样式</dt><dd>${doorTypes[room.doorType]}</dd>
+        ${room.variantName ? `<dt>内部结构</dt><dd>${room.variantName}</dd>` : ''}
+        ${room.contactRoom !== undefined ? `<dt>末端接触</dt><dd>${label(pane.frame.rooms[room.contactRoom])} 的墙面</dd>` : ''}</dl>
+        <div class="port-list"><h3>门位与连接</h3>${rows}</div>`;
+      return;
+    }
     const neighbors = links.map((edge) => label(pane.frame.rooms[edge.a === room.id ? edge.b : edge.a]));
     const role = roles[room.role];
     const levelDetail = room.level === undefined ? '' : `<dt>所在楼层</dt><dd>第 ${room.level + 1} 层</dd><dt>距入口</dt><dd>${room.depth} 段连接</dd>`;
@@ -360,7 +421,7 @@
   function setMode(mode) {
     const pane = panes[state.active];
     pane.scene.setMode(mode);
-    pane.badge.textContent = sceneLabel(algorithms[state.algorithms[state.active]], mode);
+    pane.badge.textContent = viewLabel(pane, algorithms[state.algorithms[state.active]]);
     renderActive();
   }
 
@@ -405,6 +466,30 @@
   }
 
   function bindControls() {
+    view.pieceSelect.addEventListener('change', () => {
+      const pane = panes[state.active];
+      pane.selected = view.pieceSelect.value === '' ? null : Number(view.pieceSelect.value);
+      if (pane.selected === null) pane.isolated = false;
+      updateScene(state.active);
+      if (pane.selected !== null && !pane.isolated) pane.scene.focusRoom(pane.frame.rooms[pane.selected]);
+      renderInspector();
+    });
+    view.pieceFocus.addEventListener('click', () => {
+      const pane = panes[state.active];
+      pane.isolated = !pane.isolated;
+      updateScene(state.active);
+      renderInspector();
+    });
+    view.inspector.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-neighbor]');
+      if (!button) return;
+      const pane = panes[state.active];
+      pane.selected = Number(button.dataset.neighbor);
+      if (!onHeight(pane.frame.rooms[pane.selected], pane.level)) pane.level = null;
+      updateScene(state.active);
+      if (!pane.isolated) pane.scene.focusRoom(pane.frame.rooms[pane.selected]);
+      renderInspector();
+    });
     byId('seed-form').addEventListener('submit', (event) => {
       event.preventDefault();
       const seed = view.seed.value.trim();
