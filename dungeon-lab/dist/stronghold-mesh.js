@@ -119,7 +119,7 @@
       if (room.templateId === 'filler' && side === 's' && !doors.length) {
         doors.push({ u: w / 2, y: 1, width: 3, height: 3, doorType: 'open' });
       }
-      if (room.templateId === 'portal' && side !== 'n') {
+      if (room.templateId === 'portal' && room.interior !== 'empty' && side !== 'n') {
         const start = acrossX ? 2 : 3;
         for (let u = start; u < wall.length - 2; u += 2) doors.push({ u: u + .5, y: 3, width: 1, height: 2, window: true });
       }
@@ -367,7 +367,7 @@
   function addRoom(mesh, room, cutaway, geometry = globalThis.StrongholdTemplates) {
     const brush = localBrush(mesh, room, geometry);
     shell(brush, room, cutaway, geometry.worldSide);
-    interiors[room.templateId]?.(brush, room);
+    if (room.interior !== 'empty') interiors[room.templateId]?.(brush, room);
   }
   globalThis.DungeonStrongholdMesh = { addRoom };
 })();

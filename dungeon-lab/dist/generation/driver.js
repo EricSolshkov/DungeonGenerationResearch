@@ -10,10 +10,10 @@
 
   // A trial owns its geometry, frontier and replay. Policies see spatial queries,
   // never mutate an accepted room, and choose a proposal before any instance RNG.
-  function grow(ruleset, pool, random, attempt, limit) {
+  function grow(ruleset, pool, random, attempt, limit, options) {
     const rooms = [], edges = [], ports = [], frames = [];
     const volumes = [], portIndices = [], pending = [];
-    const state = ruleset.begin();
+    const state = ruleset.begin({ ...options, pool });
     const stamp = { ruleset: ruleset.key || ruleset.id + '@' + ruleset.version, pool: pool.key || pool.id + '@' + pool.version };
     function record(phase, message, focus, candidate, focusPort, decision) {
       frames.push({ phase, message, focus, candidate, focusPort,
@@ -48,7 +48,7 @@
       }));
     }
 
-    const initial = ruleset.start({ pool, random, attempt });
+    const initial = ruleset.start({ pool, random, attempt, state });
     const [x, y, z] = initial.position;
     const initialData = pool.instantiate(initial.id, random, { facing: initial.facing });
     const start = { id: 0, x, y, z, role: initial.role, shell: true, ...initialData,
@@ -81,7 +81,7 @@
         record(phase, roomLabel(parent) + ' · ' + exit.label + '（Y=' + exit.point[1] + '）' + prefix + reason + '。',
           parent.id, candidate ?? null, exit, { kind: 'reject', reason: code, templateId, connectorId: exit.id });
       }
-      const ctx = { start, parent, exit, depth, state, pool, random, attempt, rooms, roomLabel, probe, reject };
+      const ctx = { start, parent, exit, depth, state, pool, random, attempt, rooms, ports, roomLabel, probe, reject };
       const choice = rooms.length < limit ? ruleset.select(ctx) : { stop: '达到本次运行的片段上限' };
       if (!choice.proposal) {
         const capped = { ...exit, state: 'capped' };
@@ -117,16 +117,16 @@
       const [room] = pending.splice(index, 1);
       expandRoom(room);
     }
-    const completed = ruleset.finish({ rooms, edges, ports, attempt, record, roomLabel });
+    const completed = ruleset.finish({ rooms, edges, ports, attempt, record, roomLabel, state });
     return { rooms, edges, ports, frames, completed, attempt };
   }
 
-  function run({ ruleset, pool, random }) {
+  function run({ ruleset, pool, random, ...options }) {
     const { maxAttempts = 64, maxPieces = 2048 } = ruleset;
     if (![maxAttempts, maxPieces].every((n) => Number.isSafeInteger(n) && n > 0)) throw new Error('生成预算必须为正整数');
     let result;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      result = grow(ruleset, pool, random, attempt, maxPieces);
+      result = grow(ruleset, pool, random, attempt, maxPieces, options);
       if (result.completed) return result;
     }
     // Keep the last attempted layout and report the outcome at its own stage.

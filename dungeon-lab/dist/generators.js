@@ -746,9 +746,10 @@
       }
       const { ruleset, pool } = globalThis.GrowthCatalog.resolve(selection);
       const random = randomFor(`${seed}/${ruleset.seedDomain ?? id}`);
-      layout = globalThis.ConnectorGrowth.run({ ruleset, pool, random });
+      layout = globalThis.ConnectorGrowth.run({ ruleset, pool, random, roomTarget: selection?.roomTarget });
       metadata = { viewKind: pool.viewKind || 'space', config: { ruleset: ruleset.key, pool: pool.key },
         completed: layout.completed, attempt: layout.attempt };
+      if (ruleset.roomTarget !== undefined) metadata.config.roomTarget = selection?.roomTarget ?? ruleset.roomTarget;
     } else {
       layout = new Layout(id);
       builders[id](layout, randomFor(`${seed}/${id}`));
@@ -779,7 +780,17 @@
         }
       }
     }
-    return { rooms: frame.rooms.length, doors: frame.edges.length, branches: adjacent.filter((edges) => edges.length >= 3).length, loops: frame.edges.length - frame.rooms.length + components };
+    const counts = {
+      rooms: frame.rooms.length, doors: frame.edges.length,
+      branches: adjacent.filter((edges) => edges.length >= 3).length,
+      loops: frame.edges.length - frame.rooms.length + components,
+    };
+    if (frame.rooms.length && frame.rooms.every((room) => room.category === 'corridor' || room.category === 'room')) {
+      counts.corridors = frame.rooms.filter((room) => room.category === 'corridor').length;
+      counts.rooms -= counts.corridors;
+      counts.portals = frame.rooms.filter((room) => room.templateId === 'portal').length;
+    }
+    return counts;
   }
 
   globalThis.DungeonGenerators = { algorithms, roles, portalRoute, label, generate, stats, port, connectionPath };

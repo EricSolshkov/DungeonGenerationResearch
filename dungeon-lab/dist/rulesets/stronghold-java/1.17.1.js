@@ -101,9 +101,7 @@
     return `${prefix}${roomLabel(parent)} 的${exit.label}（${exit.local.join(', ')}）接入朝${facingNames[room.facing]}的 ${roomLabel(room)}「${room.template}」，门槛 Y=${room.entryY}。${annotation}`;
   }
 
-  function finish({ rooms, edges, ports, record, roomLabel }) {
-    const portal = rooms.find((room) => room.role === 'portal');
-    if (!portal) return false;
+  function tracePortal({ rooms, edges, record, roomLabel }, portal) {
     record(2, `找到 ${roomLabel(portal)}「${portal.template}」，门槛位于 Y=${portal.entryY}，沿父片段回溯。`,
       portal.id, null, null, { kind: 'objective', templateId: portal.templateId });
     let obstructed = 0;
@@ -118,6 +116,14 @@
       record(2, `从 ${roomLabel(room)} 的入口回到 ${roomLabel(parent)} 的${port.label}（Y=${edge.aPoint[1]}）。${wall}`,
         parent.id, null, null, { kind: 'route', connectorId: port.id, obstructed: edge.obstructed });
     }
+    return obstructed;
+  }
+
+  function finish(ctx) {
+    const { rooms, edges, ports, record } = ctx;
+    const portal = rooms.find((room) => room.role === 'portal');
+    if (!portal) return false;
+    const obstructed = tracePortal(ctx, portal);
     const capped = ports.filter((p) => p.state === 'capped').length;
     const barrier = obstructed ? `，其中 ${obstructed} 处被墙面阻隔` : '';
     record(3, `要塞共 ${rooms.length} 个片段，${edges.length} 对门位相接，${capped} 个启用的出口终止扩建。入口到传送门的生成树路线经过 ${portal.depth} 次连接${barrier}。`,
@@ -138,7 +144,7 @@
       requiredConnectors: { start: ['forward'] },
       createRules, begin: () => ({ counts: new Map(), previous: null }), start,
       level: (startY, y) => Math.floor((startY - y) / 6), next: (pending, random) => Math.floor(random() * pending.length),
-      select: (ctx) => choose(entries, ctx), placed, finish };
+      select: (ctx) => choose(entries, ctx), placed, finish, tracePortal };
   }
 
   GrowthCatalog.register('ruleset', createRules());
