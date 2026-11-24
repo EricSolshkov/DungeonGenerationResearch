@@ -93,6 +93,20 @@
     return add(basisCenter, add(scale(right, midpoint(right)), scale(up, midpoint(up))));
   }
 
+  function fitDistance(corners, center, { yaw, pitch }, aspect) {
+    const forward = scale(heading(yaw, pitch), -1);
+    const right = unit(cross(forward, [0, 1, 0]));
+    const up = cross(right, forward);
+    let distance = 9;
+    for (const corner of corners) {
+      const point = subtract(corner, center);
+      const horizontal = Math.abs(dot(point, right)) * focal / aspect / .88;
+      const vertical = Math.abs(dot(point, up)) * focal / .81;
+      distance = Math.max(distance, Math.max(horizontal, vertical) - dot(point, forward));
+    }
+    return distance + 1.5;
+  }
+
   class Mesh {
     constructor() {
       this.faces = [];
@@ -704,7 +718,7 @@
     setLayout(layout, frame, selected, showFocus, level = null, isolated = false) {
       const inspectId = isolated ? selected : null;
       const openingView = viewKindOf(layout) === 'stronghold' && !isolated && showFocus && frame.phase === 0 && level === null;
-      const changed = this.layout !== layout || this.level !== level || this.inspectId !== inspectId || this.openingView !== openingView;
+      const changed = this.layout !== layout || this.level !== level || this.inspectId !== inspectId;
       if (!changed && this.frame === frame && this.selected === selected && this.showFocus === showFocus) return;
       this.layout = layout;
       this.frame = frame;
@@ -712,13 +726,11 @@
       this.showFocus = showFocus;
       this.level = level;
       this.inspectId = inspectId;
-      this.openingView = openingView;
       const solids = frame.rooms.filter((room) => this.roomVisible(room));
       if (frame.candidate && !isolated) solids.push(frame.candidate);
       this.depthBounds = limits(solids);
       if (changed) {
-        const population = openingView ? layout.final.rooms.slice(0, 2) : layout.final.rooms;
-        const viewedBounds = population.filter((room) => this.roomVisible(room));
+        const viewedBounds = layout.final.rooms.filter((room) => this.roomVisible(room));
         this.bounds = limits(viewedBounds);
         this.corners = cornersOf(viewedBounds);
         if (layout.projection === 'space') {
@@ -726,9 +738,13 @@
           this.fitCenter = centerInView(this.bounds.center, this.corners, this.defaultOrbit());
         } else this.fitCenter = this.bounds.center;
         this.fitAspect = null;
-        this.drawing.setGrid(makeGrid(this.bounds));
-        this.reset();
       }
+      if (changed || this.openingView !== openingView) {
+        this.openingView = openingView;
+        this.mapBounds = openingView ? limits(layout.final.rooms.slice(0, 2)) : this.bounds;
+        this.drawing.setGrid(makeGrid(this.mapBounds));
+      }
+      if (changed) this.reset();
       this.updateMesh();
       this.requestDraw();
     }
@@ -759,6 +775,14 @@
       if (!this.layout) return;
       const orbit = this.defaultOrbit();
       this.orbit = { ...orbit, target: [...this.fitCenter], zoom: 1 };
+      if (this.openingView) {
+        const rooms = this.layout.final.rooms.slice(0, 2);
+        const corners = cornersOf(rooms);
+        this.orbit.yaw = minecraftYaw(rooms);
+        this.orbit.target = centerInView(this.mapBounds.center, corners, this.orbit);
+        const aspect = Math.max(.1, this.canvas.clientWidth / (this.canvas.clientHeight || 1));
+        this.orbit.zoom = fitDistance(corners, this.orbit.target, this.orbit, aspect) / this.fit(aspect);
+      }
       const entrance = this.frame.rooms.find((room) => this.roomVisible(room));
       const firstEdge = this.layout.final.edges.find((edge) => edge.a === entrance.id || edge.b === entrance.id);
       const neighbor = firstEdge && this.layout.final.rooms[firstEdge.a === entrance.id ? firstEdge.b : firstEdge.a];
@@ -808,19 +832,8 @@
 
     fit(aspect) {
       if (this.fitAspect === aspect) return this.fitDistance;
-      const { yaw, pitch } = this.defaultOrbit();
-      const forward = scale(heading(yaw, pitch), -1);
-      const right = unit(cross(forward, [0, 1, 0]));
-      const up = cross(right, forward);
-      let distance = 9;
-      for (const corner of this.corners) {
-        const point = subtract(corner, this.fitCenter);
-        const horizontal = Math.abs(dot(point, right)) * focal / aspect / .88;
-        const vertical = Math.abs(dot(point, up)) * focal / .81;
-        distance = Math.max(distance, Math.max(horizontal, vertical) - dot(point, forward));
-      }
       this.fitAspect = aspect;
-      this.fitDistance = distance + 1.5;
+      this.fitDistance = fitDistance(this.corners, this.fitCenter, this.defaultOrbit(), aspect);
       return this.fitDistance;
     }
 
@@ -894,7 +907,7 @@
       const context = this.map.getContext('2d');
       context.setTransform(density, 0, 0, density, 0, 0);
       context.clearRect(0, 0, width, height);
-      const { center, lower, upper } = this.bounds;
+      const { center, lower, upper } = this.mapBounds;
       const side = this.layout.projection === 'side';
       const axis = side ? 1 : 2;
       const sign = side ? -1 : 1;
