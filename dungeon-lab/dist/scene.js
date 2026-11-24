@@ -16,7 +16,8 @@
   const tint = (color, alpha = 1) => [...color, alpha];
   const cssColor = ([r, g, b, a]) => `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
   const near = 0.08;
-  const far = 3200;
+  const insideRoomPickPenalty = 3200;
+  const lineDepthOffset = .005;
   const focal = 1 / Math.tan(Math.PI / 9.6);
   const heading = (yaw, pitch) => [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
 
@@ -32,6 +33,20 @@
       }
     }
     return { lower, upper, center: scale(add(lower, upper), 0.5) };
+  }
+
+  function clipRange(bounds, eye, forward) {
+    let closest = 0;
+    let furthest = 0;
+    for (let axis = 0; axis < 3; axis++) {
+      const a = (bounds.lower[axis] - eye[axis]) * forward[axis];
+      const b = (bounds.upper[axis] - eye[axis]) * forward[axis];
+      closest += Math.min(a, b);
+      furthest += Math.max(a, b);
+    }
+    // Leave room for floors, outlines and door markers outside the room boxes.
+    const front = Math.max(near, closest - 2);
+    return { near: front, far: Math.max(front + 1, furthest + 2) };
   }
 
   function cornersOf(rooms) {
@@ -82,7 +97,7 @@
     }
 
     line(a, b, color) { this.lines.push({ points: [a, b], color }); }
-    face(points, color) { this.faces.push({ points, color }); }
+    face(points, color, sign) { this.faces.push({ points, color, sign }); }
 
     stroke(points, color) {
       points.forEach((point, index) => this.line(point, points[(index + 1) % points.length], color));
@@ -403,8 +418,19 @@
       portMark(model, room, entry, cutaway, inspecting);
     }
     if (frame.candidate && !isolated && (level === null || frame.focusPort?.point[1] === level)) {
-      candidateBox(previews, frame.candidate, rgb('#ff7b9b'), true);
+      const candidate = frame.candidate;
+      const color = rgb('#ff7b9b');
+      if (id === 'stronghold') {
+        // The rejected volume can coincide with an existing wall or floor.
+        const bottom = floorRectangle(candidate.x, candidate.y, candidate.z, candidate.w, candidate.d);
+        const top = bottom.map(([x, y, z]) => [x, y + candidate.h, z]);
+        const edge = tint(color, .9);
+        previews.stroke(bottom, edge);
+        previews.stroke(top, edge);
+        bottom.forEach((point, index) => previews.line(point, top[index], edge));
+      } else candidateBox(previews, candidate, color, true);
     }
+    if (id === 'stronghold') model.faces = globalThis.StrongholdSurfaces.resolve(model.faces);
     return { model, previews };
   }
 
@@ -419,8 +445,10 @@
     void main() {
       vec3 point = a_position - u_eye;
       float d = dot(point, u_forward);
-      gl_Position = vec4(dot(point, u_right) * u_scale.x, dot(point, u_up) * u_scale.y,
-        d * (u_depth.x - u_bias) + u_depth.y, d);
+      // Move line depth toward the eye by a small world-space distance, keeping XY
+      // unchanged. A fixed NDC offset can show rear edges through entire rooms.
+      float depth = d * u_depth.x + u_depth.y * (1.0 + u_bias / max(d - u_bias, 0.08));
+      gl_Position = vec4(dot(point, u_right) * u_scale.x, dot(point, u_up) * u_scale.y, depth, d);
       v_color = a_color;
       v_distance = d;
     }`;
@@ -485,7 +513,6 @@
       this.batches = Array.from({ length: 5 }, () => ({ buffer: gl.createBuffer(), count: 0 }));
       gl.enableVertexAttribArray(this.position);
       gl.enableVertexAttribArray(this.color);
-      gl.uniform2f(this.uniform.depth, (far + near) / (far - near), -2 * far * near / (far - near));
       gl.enable(gl.BLEND);
       gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       gl.enable(gl.DEPTH_TEST);
@@ -531,14 +558,18 @@
       gl.uniform2f(this.uniform.scale, focal / camera.aspect, focal);
       gl.depthMask(false);
       gl.uniform1f(this.uniform.grid, 1);
+      // Grid lines may extend beyond the model. They never write model depth.
+      gl.uniform2f(this.uniform.depth, 1, -2 * near);
       this.batch(0, gl.LINES);
       gl.uniform1f(this.uniform.grid, 0);
+      const { near: front, far: back } = camera.clip;
+      gl.uniform2f(this.uniform.depth, (back + front) / (back - front), -2 * back * front / (back - front));
       gl.depthMask(true);
       this.batch(1, gl.TRIANGLES);
       gl.depthMask(false);
       this.batch(2, gl.TRIANGLES);
-      this.batch(3, gl.LINES, .000012);
-      this.batch(4, gl.LINES, .00001);
+      this.batch(3, gl.LINES, lineDepthOffset);
+      this.batch(4, gl.LINES, lineDepthOffset);
     }
   }
 
@@ -589,7 +620,7 @@
       const project = (primitive) => {
         const points = clipNear(primitive.points.map((point) => toView(point, camera)));
         const depth = points.reduce((sum, point) => sum + point[2], 0) / points.length;
-        return { ...primitive, points, depth: depth - (primitive.points.length === 2 ? .05 : 0) };
+        return { ...primitive, points, depth: depth - (primitive.points.length === 2 ? lineDepthOffset : 0) };
       };
       this.grid.lines.map(project).filter(({ points }) => points.length === 2).forEach(paint);
       this.primitives.map(project).filter(({ points }) => points.length > 1).sort((a, b) => b.depth - a.depth).forEach(paint);
@@ -636,7 +667,7 @@
       start = Math.max(start, Math.min(a, b));
       end = Math.min(end, Math.max(a, b));
     }
-    return end >= Math.max(start, near) ? (start > near ? start : end + far) : Infinity;
+    return end >= Math.max(start, near) ? (start > near ? start : end + insideRoomPickPenalty) : Infinity;
   }
 
   class Scene {
@@ -676,6 +707,9 @@
       this.level = level;
       this.inspectId = inspectId;
       this.openingView = openingView;
+      const solids = frame.rooms.filter((room) => this.roomVisible(room));
+      if (frame.candidate && !isolated) solids.push(frame.candidate);
+      this.depthBounds = limits(solids);
       if (changed) {
         const population = openingView ? layout.final.rooms.slice(0, 2) : layout.final.rooms;
         const viewedBounds = population.filter((room) => this.roomVisible(room));
@@ -789,7 +823,7 @@
       const eye = isOrbit ? add(view.target, scale(direction, this.fit(aspect) * view.zoom)) : view.eye;
       const right = unit(cross(forward, [0, 1, 0]));
       const up = cross(right, forward);
-      return { eye, forward, right, up, aspect };
+      return { eye, forward, right, up, aspect, clip: clipRange(this.depthBounds, eye, forward) };
     }
 
     requestDraw() {

@@ -25,7 +25,13 @@
         Math.max(a[0], b[0]), b[1], Math.max(a[2], b[2]), color);
     };
     const line = (x0, y0, z0, x1, y1, z1, color = mortar) => mesh.line(point(x0, y0, z0), point(x1, y1, z1), color);
-    const face = (points, color) => mesh.face(points.map((p) => point(...p)), color);
+    // Material patches share the block surface. Give the mesher their outward
+    // direction explicitly because some Java orientations mirror the template.
+    const face = (points, color, side) => {
+      const facing = side === 'up' ? side : worldSide(room.facing, side);
+      const sign = facing === 'up' || facing === 'e' || facing === 's' ? 1 : -1;
+      mesh.face(points.map((p) => point(...p)), color, sign);
+    };
     return { box, line, face };
   }
 
@@ -78,10 +84,10 @@
     brush.box(left, bottom, 0, right, top, 1, stone);
     // Thin interior joints retain the block scale without meshing every brick.
     for (let y = Math.ceil(bottom); y < top; y++) {
-      if (y > bottom) brush.line(left, y, 1.006, right, y, 1.006, mortar);
+      if (y > bottom) brush.line(left, y, 1, right, y, 1, mortar);
       const start = Math.floor((left - y % 2) / 2) * 2 + y % 2;
       for (let x = start + 2; x < right; x += 2) {
-        brush.line(x, y, 1.006, x, Math.min(y + 1, top), 1.006, mortar);
+        brush.line(x, y, 1, x, Math.min(y + 1, top), 1, mortar);
       }
     }
   }
@@ -96,12 +102,12 @@
         if (grain > 4) continue;
         const x1 = Math.min(w - 1, x + 1.92);
         const z1 = Math.min(d - 1, z + .92);
-        if (x1 > x && z1 > z) brush.face([[x, 1.003, z], [x1, 1.003, z],
-          [x1, 1.003, z1], [x, 1.003, z1]], grain < 2 ? moss : stone);
+        if (x1 > x && z1 > z) brush.face([[x, 1, z], [x1, 1, z],
+          [x1, 1, z1], [x, 1, z1]], grain < 2 ? moss : stone, 'up');
       }
     }
-    for (let x = 2; x < w - 1; x += 2) brush.line(x, 1.008, 1, x, 1.008, d - 1);
-    for (let z = 2; z < d - 1; z += 2) brush.line(1, 1.008, z, w - 1, 1.008, z);
+    for (let x = 2; x < w - 1; x += 2) brush.line(x, 1, 1, x, 1, d - 1);
+    for (let z = 2; z < d - 1; z += 2) brush.line(1, 1, z, w - 1, 1, z);
     if (!cutaway) brush.box(0, h - 1, 0, w, h, d, mortar);
     for (const side of sides) {
       const wall = wallBrush(brush, room, side);
@@ -254,12 +260,12 @@
         const high = low + .62 + (i % 3) * .075;
         const color = fronts[(tier + i + z) % fronts.length];
         if (alongX) {
-          for (const side of [z - .012, z + depth + .012]) {
-            face([[x + u, low, side], [x + u + .43, low, side], [x + u + .43, high, side], [x + u, high, side]], color);
+          for (const [plane, side] of [[z, 'n'], [z + depth, 's']]) {
+            face([[x + u, low, plane], [x + u + .43, low, plane], [x + u + .43, high, plane], [x + u, high, plane]], color, side);
           }
         } else {
-          for (const side of [x - .012, x + width + .012]) {
-            face([[side, low, z + u], [side, low, z + u + .43], [side, high, z + u + .43], [side, high, z + u]], color);
+          for (const [plane, side] of [[x, 'w'], [x + width, 'e']]) {
+            face([[plane, low, z + u], [plane, low, z + u + .43], [plane, high, z + u + .43], [plane, high, z + u]], color, side);
           }
         }
       }
