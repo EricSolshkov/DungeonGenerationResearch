@@ -45,6 +45,18 @@
         ['FeatureUtils · 要塞片段选择与回退', 'https://github.com/KaptainWutax/FeatureUtils/blob/master/src/main/java/kaptainwutax/featureutils/structure/generator/structure/StrongholdGenerator.java'],
       ],
     },
+    'connector-growth': {
+      title: '连接器生长', short: '规则集与模板池', accent: '#78d6cc', icon: 'route',
+      projection: 'space', view: '三维剖面',
+      summary: '从起始片段的出口扩建，用同一种子对照不同规则集和模板池的生成过程。',
+      phases: [
+        ['安置起点', '确定起始片段的位置、朝向和首批连接。'],
+        ['逐门扩建', '按规则取出待扩建片段，将候选入口对齐出口并检查占用。'],
+        ['验证目标', '由规则集检查生成条件，回放对目标的验证。'],
+        ['汇总结果', '查看规则集给出的布局结果。'],
+      ],
+      sources: [],
+    },
     isaac: {
       title: '以撒的结合', short: '网格队列生长', accent: '#b6a0ff', icon: 'grid',
       projection: 'plan', view: '平面挤出',
@@ -724,11 +736,26 @@
 
   const builders = { dead: buildDead, minecraft: buildMinecraft, stronghold: buildStronghold, isaac: buildIsaac, gungeon: buildGungeon };
 
-  function generate(id, seed) {
-    const layout = new Layout(id);
-    builders[id](layout, randomFor(`${seed}/${id}`));
+  function generate(id, seed, selection) {
+    let layout;
+    let metadata = {};
+    if (id === 'connector-growth') {
+      if (typeof module === 'object' && module.exports) {
+        require('./generation/catalog.js');
+        require('./generation/driver.js');
+      }
+      const { ruleset, pool } = globalThis.GrowthCatalog.resolve(selection);
+      const random = randomFor(`${seed}/${ruleset.seedDomain ?? id}`);
+      layout = globalThis.ConnectorGrowth.run({ ruleset, pool, random });
+      metadata = { viewKind: pool.viewKind || 'space', config: { ruleset: ruleset.key, pool: pool.key },
+        completed: layout.completed, attempt: layout.attempt };
+    } else {
+      layout = new Layout(id);
+      builders[id](layout, randomFor(`${seed}/${id}`));
+      if (id === 'stronghold') metadata.viewKind = 'stronghold';
+    }
     const framesByPhase = algorithms[id].phases.map((_, phase) => layout.frames.filter((frame) => frame.phase === phase));
-    return { id, seed, projection: layout.projection, framesByPhase, final: layout.frames.at(-1) };
+    return { id, seed, projection: algorithms[id].projection, framesByPhase, final: layout.frames.at(-1), ...metadata };
   }
 
   function stats(frame) {

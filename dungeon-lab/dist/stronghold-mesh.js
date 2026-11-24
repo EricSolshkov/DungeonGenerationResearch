@@ -1,7 +1,6 @@
 (() => {
   'use strict';
 
-  const { worldPoint, worldSide } = globalThis.StrongholdTemplates;
   const colors = {
     stone: '#84918d', floor: '#73827c', moss: '#6b8071', mortar: '#4e5f5b',
     slab: '#a7b3a8', wood: '#78563d', plank: '#b18858', iron: '#91a6a7', metal: '#47565b',
@@ -16,7 +15,7 @@
   const sides = ['n', 'e', 's', 'w'];
 
   // The mesh and the generation graph share the same continuous block boundaries.
-  function localBrush(mesh, room) {
+  function localBrush(mesh, room, { worldPoint, worldSide }) {
     const point = (x, y, z) => worldPoint(room, [x, y, z]);
     const box = (x0, y0, z0, x1, y1, z1, color = stone) => {
       const a = point(x0, y0, z0);
@@ -92,7 +91,7 @@
     }
   }
 
-  function shell(brush, room, cutaway) {
+  function shell(brush, room, cutaway, worldSide) {
     const { localW: w, localH: h, localD: d } = room;
     brush.box(0, 0, 0, w, 1, d, floor);
     // A few contrasting slabs make stone courses visible in the orbit overview.
@@ -365,9 +364,9 @@
 
   const interiors = { start: spiral, spiralStairs: spiral, straightStairs, fiveCrossing,
     crossing, prison, chest: chestCorridor, library, portal };
-  function addRoom(mesh, room, cutaway) {
-    const brush = localBrush(mesh, room);
-    shell(brush, room, cutaway);
+  function addRoom(mesh, room, cutaway, geometry = globalThis.StrongholdTemplates) {
+    const brush = localBrush(mesh, room, geometry);
+    shell(brush, room, cutaway, geometry.worldSide);
     interiors[room.templateId]?.(brush, room);
   }
   globalThis.DungeonStrongholdMesh = { addRoom };

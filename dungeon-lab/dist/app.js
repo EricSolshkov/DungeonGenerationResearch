@@ -3,6 +3,8 @@
 
   const { algorithms, roles, portalRoute, generate, label, stats } = globalThis.DungeonGenerators;
   const ids = Object.keys(algorithms);
+  const growthId = 'connector-growth';
+  const catalog = globalThis.GrowthCatalog;
   const games = ids.filter((id) => !algorithms[id].group);
   const minecraftVariants = ['minecraft', 'stronghold'];
   const gameOf = (id) => algorithms[id].group || id;
@@ -12,15 +14,25 @@
   };
   const byId = (id) => document.getElementById(id);
   const pad = (number) => String(number).padStart(2, '0');
+  const html = (value) => String(value ?? '').replace(/[&<>"']/g, (char) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const metrics = [['rooms', '房间数'], ['doors', '连接数'], ['branches', '分岔点'], ['loops', '环路数']];
   const strongholdMetrics = [['heights', '门槛标高数'], ['stairPieces', '楼梯片段']];
   const moveKeys = new Set(['w', 'a', 's', 'd', 'q', 'e']);
-  const { doorHeights } = globalThis.StrongholdTemplates;
+  const roleOf = (room) => Object.hasOwn(roles, room.role) ? roles[room.role] : roles.normal;
   const compass = { n: '北', e: '东', s: '南', w: '西' };
   const portStates = { entrance: '起始入口', matched: '已连接', waiting: '待扩展', capped: '扩展结束', inactive: '未启用', terminal: '短廊末端' };
-  const onHeight = (room, height) => height === null || doorHeights(room).includes(height);
-  const heightsOf = (rooms) => [...new Set(rooms.flatMap(doorHeights))].sort((a, b) => b - a);
+  const onHeight = (room, pane) => pane.level === null || pane.doorHeights(room).includes(pane.level);
+  const heightsOf = (rooms, reader) => [...new Set(rooms.flatMap(reader))].sort((a, b) => b - a);
+
+  function heightReader(layout) {
+    if (!layout.config) return globalThis.StrongholdTemplates.doorHeights;
+    const pool = catalog.get('pool', layout.config.pool);
+    return pool.doorHeights || ((room) => room.connectors
+      .filter((p) => p.id === 'entry' || p.active || p.hasOpening)
+      .map((p) => pool.worldPoint(room, [p.x, p.y, p.z])[1]));
+  }
   const sceneLabel = (algorithm, mode) => algorithm.projection === 'space' && mode === 'fly' ? '室内漫游' : algorithm.view;
   const view = {
     lab: byId('lab'), workbench: byId('workbench'), panes: byId('panes'),
@@ -31,12 +43,10 @@
     compare: byId('compare-button'), orbit: byId('orbit-button'), fly: byId('fly-button'), full: byId('fullscreen'),
     legend: byId('legend'), hint: byId('view-hint'), guide: byId('guide'),
     pieceTools: byId('piece-tools'), pieceSelect: byId('piece-select'), pieceFocus: byId('piece-focus'),
+    status: byId('generation-status'),
   };
 
-  const state = { seed: view.seed.value, algorithms: ['dead', 'minecraft'], minecraft: 'minecraft', comparing: false, active: 0, cursor: 0, speed: 1, timer: null };
-  if (location.hash === '#stronghold') {
-    state.algorithms[0] = state.minecraft = 'stronghold';
-  }
+  const state = { seed: view.seed.value, algorithms: ['dead', 'minecraft'], growth: [null, null], minecraft: 'minecraft', comparing: false, active: 0, cursor: 0, speed: 1, timer: null };
   let timeline = [];
   let cache = new Map();
   let renderedPhases = '';
@@ -44,18 +54,32 @@
 
   function makePane(index) {
     const root = byId('pane-template').content.firstElementChild.cloneNode(true);
-    const select = root.querySelector('select');
+    const select = root.querySelector('.compare-select');
     const levelSelect = root.querySelector('.level-select');
-    const algorithmName = root.querySelector('.pane-algorithm');
+    const letter = index === 0 ? 'A' : 'B';
+    root.querySelector('.pane-letter').textContent = letter;
+    select.setAttribute('aria-label', `${letter} 窗算法`);
+    const packControls = root.querySelector('.growth-controls');
+    const packFields = packControls.querySelector('.growth-fields');
+    const expand = packControls.querySelector('.growth-expand');
+    packFields.id = `growth-fields-${index}`;
+    expand.setAttribute('aria-controls', packFields.id);
+    expand.addEventListener('click', () => setPackFields(index, packFields.hidden));
+    const packSelects = {};
+    for (const [key, name] of [['preset', '预设'], ['ruleset', '生成规则'], ['pool', '模板池']]) {
+      const field = packControls.querySelector(`.growth-${key}`);
+      field.setAttribute('aria-label', `${letter} 窗${name}`);
+      field.addEventListener('change', () => switchPacks(index, key, field.value));
+      packSelects[key] = field;
+    }
     const pane = {
-      root, select, levelSelect, algorithmName, selected: null, frame: null, layout: null, level: null, isolated: false,
+      root, select, levelSelect, packControls, packSelects, packFields, expand, packError: root.querySelector('.growth-error'),
+      packSummary: root.querySelector('.growth-summary'),
+      selected: null, frame: null, layout: null, level: null, isolated: false,
       compareTitle: root.querySelector('.compare-title'), phase: root.querySelector('.pane-phase'),
       event: root.querySelector('.compare-event'), badge: root.querySelector('.stage-badge span'),
       mapTitle: root.querySelector('.minimap-title span'),
     };
-    select.hidden = index === 0;
-    select.parentElement.hidden = index === 0;
-    algorithmName.hidden = index === 1;
     select.innerHTML = ids.map((id) => `<option value="${id}">${nameOf(id)}</option>`).join('');
     select.addEventListener('change', () => switchAlgorithm(index, select.value));
     levelSelect.addEventListener('change', () => {
@@ -66,6 +90,7 @@
       renderInspector();
     });
     pane.compareTitle.addEventListener('pointerdown', () => activate(index));
+    packControls.addEventListener('focusin', () => activate(index));
     view.panes.append(root);
     root.hidden = index > 0;
     pane.scene = new globalThis.DungeonScene(root, () => activate(index), (id) => {
@@ -75,6 +100,43 @@
       renderInspector();
     });
     return pane;
+  }
+
+  function populatePacks() {
+    const presets = catalog.list('preset');
+    const rulesets = catalog.list('ruleset');
+    const pools = catalog.list('pool');
+    for (const [index, pane] of panes.entries()) {
+      const custom = new Option('自定义组合', '');
+      custom.disabled = true;
+      pane.packSelects.preset.add(custom);
+      for (const [key, entries] of [['preset', presets], ['ruleset', rulesets], ['pool', pools]]) {
+        for (const item of entries) {
+          const option = new Option(`${item.name} · ${item.version}`, item.key);
+          if (item.description) option.title = item.description;
+          pane.packSelects[key].add(option);
+        }
+      }
+      const preferred = index === 0 ? catalog.defaultPresets.control : catalog.defaultPresets.experiment;
+      for (const preset of [...presets].sort((a, b) => Number(b.key === preferred) - Number(a.key === preferred))) {
+        try {
+          catalog.resolve(preset);
+          state.growth[index] = { preset: preset.key, ruleset: preset.ruleset, pool: preset.pool };
+          break;
+        } catch { /* A preset can refer to a pack that failed to load. */ }
+      }
+      if (!state.growth[index]) {
+        for (const rules of rulesets) {
+          for (const pool of pools) {
+            const config = { preset: '', ruleset: rules.key, pool: pool.key };
+            try { catalog.resolve(config); } catch { continue; }
+            state.growth[index] = config;
+            break;
+          }
+          if (state.growth[index]) break;
+        }
+      }
+    }
   }
 
   function renderAlgorithmList() {
@@ -97,9 +159,15 @@
     });
   }
 
-  function layoutFor(id) {
-    if (!cache.has(id)) cache.set(id, generate(id, state.seed));
-    return cache.get(id);
+  function layoutFor(id, index, selection = state.growth[index]) {
+    const options = id === growthId ? { ruleset: selection.ruleset, pool: selection.pool } : undefined;
+    const key = options ? JSON.stringify([id, options.ruleset, options.pool]) : id;
+    if (!cache.has(key)) {
+      const layout = generate(id, state.seed, options);
+      if (!layout.framesByPhase.some((frames) => frames.length)) throw new Error('生成结果中没有可回放的步骤。');
+      cache.set(key, layout);
+    }
+    return cache.get(key);
   }
 
   function cursorPosition() {
@@ -108,19 +176,29 @@
   }
 
   function rebuildTimeline(position) {
-    const layouts = state.algorithms.slice(0, state.comparing ? 2 : 1).map(layoutFor);
-    timeline = layouts[0].framesByPhase.flatMap((_, phase) => {
-      const phases = layouts.map((layout) => layout.framesByPhase[phase]);
+    const layouts = state.algorithms.slice(0, state.comparing ? 2 : 1).map((id, index) => layoutFor(id, index));
+    const held = layouts.map((layout) => layout.framesByPhase.find((frames) => frames.length)?.[0]);
+    const phaseCount = Math.max(...layouts.map((layout) => layout.framesByPhase.length));
+    timeline = Array.from({ length: phaseCount }, (_, phase) => {
+      const phases = layouts.map((layout) => layout.framesByPhase[phase] || []);
       const length = Math.max(...phases.map((frames) => frames.length));
-      return Array.from({ length }, (_, index) => {
+      const steps = Array.from({ length }, (_, index) => {
         const progress = length > 1 ? index / (length - 1) : 0;
-        return { phase, progress, frames: phases.map((frames) => frames[Math.round(progress * (frames.length - 1))]) };
+        return { phase, progress, frames: phases.map((frames, side) =>
+          frames.length ? frames[Math.round(progress * (frames.length - 1))] : held[side]) };
       });
-    });
+      phases.forEach((frames, side) => { if (frames.length) held[side] = frames.at(-1); });
+      return steps;
+    }).flat();
     if (position?.end) state.cursor = timeline.length - 1;
     else if (position) {
       const candidates = timeline.map((step, index) => ({ step, index })).filter(({ step }) => step.phase === position.phase);
-      state.cursor = candidates.reduce((best, next) => Math.abs(next.step.progress - position.progress) < Math.abs(best.step.progress - position.progress) ? next : best).index;
+      if (candidates.length) {
+        state.cursor = candidates.reduce((best, next) => Math.abs(next.step.progress - position.progress) < Math.abs(best.step.progress - position.progress) ? next : best).index;
+      } else {
+        const later = timeline.findIndex((step) => step.phase > position.phase);
+        state.cursor = later >= 0 ? later : timeline.length - 1;
+      }
     } else state.cursor = 0;
     view.progress.max = timeline.length - 1;
   }
@@ -129,28 +207,30 @@
     const pane = panes[index];
     const id = state.algorithms[index];
     const template = algorithms[id];
-    const layout = layoutFor(id);
+    const layout = layoutFor(id, index);
+    const detailed = layout.viewKind === 'stronghold';
     const frame = timeline[state.cursor].frames[index];
     if (!frame) return;
     if (pane.layout !== layout) {
       pane.layout = layout;
       pane.level = null;
       pane.isolated = false;
-      pane.root.classList.toggle('stronghold-pane', id === 'stronghold');
-      pane.levelSelect.parentElement.hidden = id !== 'stronghold';
-      if (id === 'stronghold') {
-        const heights = heightsOf(layout.final.rooms);
+      pane.root.classList.toggle('stronghold-pane', detailed);
+      pane.levelSelect.parentElement.hidden = !detailed;
+      if (detailed) {
+        pane.doorHeights = heightReader(layout);
+        const heights = heightsOf(layout.final.rooms, pane.doorHeights);
         pane.levelSelect.innerHTML = '<option value="">全部标高</option>' + heights.map((height) =>
           `<option value="${height}">门槛 Y = ${height}</option>`).join('');
       }
     }
-    if (id === 'stronghold') {
-      const present = new Set(heightsOf(frame.rooms));
+    if (detailed) {
+      const present = new Set(heightsOf(frame.rooms, pane.doorHeights));
       if (!present.has(pane.level)) pane.level = null;
       for (const option of pane.levelSelect.options) option.disabled = option.value !== '' && !present.has(Number(option.value));
       pane.levelSelect.value = pane.level ?? '';
     }
-    if (!frame.rooms.some((room) => room.id === pane.selected && onHeight(room, pane.level))) {
+    if (!frame.rooms.some((room) => room.id === pane.selected && onHeight(room, pane))) {
       pane.selected = null;
       pane.isolated = false;
     }
@@ -174,13 +254,11 @@
     view.compare.querySelector('span').textContent = comparing ? '退出对比' : '并排对比';
     panes[1].root.hidden = !comparing;
     for (const [index, pane] of panes.entries()) {
-      const algorithm = algorithms[state.algorithms[index]];
       pane.compareTitle.hidden = !comparing;
       pane.event.hidden = !comparing;
-      pane.algorithmName.querySelector('strong').textContent = nameOf(state.algorithms[index]);
-      pane.algorithmName.style.setProperty('--game-color', algorithm.accent);
       pane.select.value = state.algorithms[index];
-      for (const option of pane.select.options) option.disabled = option.value === state.algorithms[0];
+      pane.packControls.hidden = state.algorithms[index] !== growthId;
+      if (!pane.packControls.hidden) showPackSelection(index);
     }
     const primaryGame = gameOf(state.algorithms[0]);
     for (const button of view.algorithms.querySelectorAll('[data-algorithm]')) {
@@ -192,9 +270,10 @@
       button.setAttribute('aria-pressed', String(button.dataset.variant === state.algorithms[0]));
     }
     const visible = state.algorithms.slice(0, comparing ? 2 : 1);
-    const usedRoles = new Set(visible.flatMap((id) => layoutFor(id).final.rooms.map((room) => room.role)));
-    const items = Object.entries(roles).filter(([key]) => usedRoles.has(key)).map(([, role]) => role);
-    if (visible.includes('stronghold')) items.push(portalRoute);
+    const layouts = visible.map((id, index) => layoutFor(id, index));
+    const usedRoles = new Set(layouts.flatMap((layout) => layout.final.rooms.map(roleOf)));
+    const items = Object.values(roles).filter((role) => usedRoles.has(role));
+    if (layouts.some((layout) => layout.final.edges.some((edge) => edge.toPortal))) items.push(portalRoute);
     view.legend.innerHTML = items.map(({ name, color }) => `<span class="legend-item" style="--role-color:${color}">${name}</span>`).join('');
     renderActive();
   }
@@ -216,11 +295,11 @@
     renderInspector();
   }
 
-  function frameStats({ frame, layout }) {
+  function frameStats({ frame, layout, doorHeights }) {
     const counts = stats(frame);
-    if (layout.id === 'stronghold') {
+    if (layout.viewKind === 'stronghold') {
       const stairPieces = frame.rooms.filter((room) => ['start', 'straightStairs', 'spiralStairs'].includes(room.templateId)).length;
-      return { ...counts, heights: heightsOf(frame.rooms).length, stairPieces };
+      return { ...counts, heights: heightsOf(frame.rooms, doorHeights).length, stairPieces };
     }
     return counts;
   }
@@ -228,13 +307,13 @@
   function renderStats() {
     const left = frameStats(panes[0]);
     if (!state.comparing) {
-      const shown = state.algorithms[0] === 'stronghold' ? [['rooms', '结构片段'], metrics[1], ...strongholdMetrics] : metrics;
+      const shown = panes[0].layout.viewKind === 'stronghold' ? [['rooms', '结构片段'], metrics[1], ...strongholdMetrics] : metrics;
       view.stats.innerHTML = `<div class="stats-grid">${shown.map(([key, name]) => `<div class="stat"><strong>${pad(left[key])}</strong><span>${name}</span></div>`).join('')}</div>`;
       return;
     }
     const right = frameStats(panes[1]);
     const titles = state.algorithms.map(nameOf);
-    const shown = state.algorithms.includes('stronghold') ? [...metrics, ...strongholdMetrics] : metrics;
+    const shown = panes.some((pane) => pane.layout.viewKind === 'stronghold') ? [...metrics, ...strongholdMetrics] : metrics;
     const number = (value) => value === undefined ? '—' : pad(value);
     view.stats.innerHTML = `<table class="compare-stats" aria-label="两种算法的布局统计"><thead><tr><th scope="col">指标</th><th scope="col" title="${titles[0]}" aria-label="${titles[0]}">左侧</th><th scope="col" title="${titles[1]}" aria-label="${titles[1]}">右侧</th></tr></thead>
       <tbody>${shown.map(([key, name]) => `<tr><th scope="row">${name}</th><td>${number(left[key])}</td><td>${number(right[key])}</td></tr>`).join('')}</tbody></table>`;
@@ -252,6 +331,7 @@
       renderedPhases = id;
     }
     for (const [index, button] of [...view.phases.querySelectorAll('button')].entries()) {
+      button.disabled = !panes[state.active].layout.framesByPhase[index]?.length;
       if (index === phase) button.setAttribute('aria-current', 'step');
       else button.removeAttribute('aria-current');
       button.classList.toggle('done', index < phase);
@@ -264,16 +344,16 @@
   function renderInspector() {
     const pane = panes[state.active];
     const room = pane.frame?.rooms.find((entry) => entry.id === pane.selected);
-    const stronghold = pane.layout?.id === 'stronghold';
+    const stronghold = pane.layout?.viewKind === 'stronghold';
     view.pieceTools.hidden = !stronghold;
     if (stronghold) {
       const groups = new Map();
-      for (const item of pane.frame.rooms.filter((item) => onHeight(item, pane.level))) {
+      for (const item of pane.frame.rooms.filter((item) => onHeight(item, pane))) {
         if (!groups.has(item.template)) groups.set(item.template, []);
-        groups.get(item.template).push(`<option value="${item.id}">${label(item)} · ${item.variantName || item.template}</option>`);
+        groups.get(item.template).push(`<option value="${item.id}">${label(item)} · ${html(item.variantName || item.template)}</option>`);
       }
       const options = '<option value="">选择要塞片段…</option>' + [...groups].map(([name, items]) =>
-        `<optgroup label="${name}">${items.join('')}</optgroup>`).join('');
+        `<optgroup label="${html(name)}">${items.join('')}</optgroup>`).join('');
       if (view.pieceSelect.innerHTML !== options) view.pieceSelect.innerHTML = options;
       view.pieceSelect.value = room?.id ?? '';
       view.pieceFocus.disabled = !room;
@@ -295,25 +375,25 @@
         const to = edge && pane.frame.rooms[edge.a === room.id ? edge.b : edge.a];
         const wall = edge?.obstructed ? ' · 墙体阻断' : p.state === 'inactive' && p.hasOpening ? ' · 墙上有开口' : '';
         const stateText = `${portStates[p.state]}${wall}`;
-        const action = to ? `<button type="button" data-neighbor="${to.id}" title="查看${to.template}">${label(to)}</button>` : '';
-        return `<div class="port-row"><span>${p.label} · ${compass[p.side]}</span>${action}
+        const action = to ? `<button type="button" data-neighbor="${to.id}" title="查看${html(to.template)}">${label(to)}</button>` : '';
+        return `<div class="port-row"><span>${html(p.label)} · ${compass[p.side]}</span>${action}
           <small>局部 (${p.local.join(', ')}) · Y=${p.point[1]}<br>${stateText}</small></div>`;
       }).join('');
-      const role = roles[room.role];
-      view.inspector.innerHTML = `<div class="inspector-room" style="--role-color:${role.color}"><strong>${label(room)}</strong><span>${room.template}</span></div>
+      const role = roleOf(room);
+      view.inspector.innerHTML = `<div class="inspector-room" style="--role-color:${role.color}"><strong>${label(room)}</strong><span>${html(room.template)}</span></div>
         <dl class="room-detail"><dt>模板尺寸</dt><dd>${room.localW} × ${room.localH} × ${room.localD} 格</dd>
         <dt>朝向 / 深度</dt><dd>${compass[room.facing]} / 第 ${room.depth} 代</dd>
-        <dt>入口样式</dt><dd>${doorTypes[room.doorType]}</dd>
-        ${room.variantName ? `<dt>内部结构</dt><dd>${room.variantName}</dd>` : ''}
+        <dt>入口样式</dt><dd>${doorTypes[room.doorType] || '—'}</dd>
+        ${room.variantName ? `<dt>内部结构</dt><dd>${html(room.variantName)}</dd>` : ''}
         ${room.contactRoom !== undefined ? `<dt>末端接触</dt><dd>${label(pane.frame.rooms[room.contactRoom])} 的墙面</dd>` : ''}</dl>
         <div class="port-list"><h3>门位与连接</h3>${rows}</div>`;
       return;
     }
     const neighbors = links.map((edge) => label(pane.frame.rooms[edge.a === room.id ? edge.b : edge.a]));
-    const role = roles[room.role];
+    const role = roleOf(room);
     const levelDetail = room.level === undefined ? '' : `<dt>所在楼层</dt><dd>第 ${room.level + 1} 层</dd><dt>距入口</dt><dd>${room.depth} 段连接</dd>`;
     const roomTitle = room.template === role.name ? label(room) : `${label(room)} · ${role.name}`;
-    const display = `<div class="inspector-room" style="--role-color:${role.color}"><strong>${roomTitle}</strong><span>${room.template || '规划节点'}</span></div>
+    const display = `<div class="inspector-room" style="--role-color:${role.color}"><strong>${roomTitle}</strong><span>${html(room.template || '规划节点')}</span></div>
       <dl class="room-detail"><dt>宽 × 高 × 深</dt><dd class="mono">${room.w.toFixed(1)} × ${room.h.toFixed(1)} × ${room.d.toFixed(1)}</dd>
       <dt>地面标高</dt><dd class="mono">${room.y.toFixed(1)}</dd>${levelDetail}<dt>已通 / 规划</dt><dd class="mono">${links.filter((edge) => edge.open).length} / ${links.length}</dd>
       <dt>邻接房间</dt><dd class="mono">${neighbors.join(' · ') || '—'}</dd></dl>`;
@@ -330,6 +410,7 @@
     view.first.disabled = state.cursor === 0;
     view.prev.disabled = state.cursor === 0;
     view.next.disabled = state.cursor === last;
+    view.play.disabled = last === 0;
     view.play.querySelector('use').setAttribute('href', playing ? '#i-pause' : '#i-play');
     view.play.querySelector('span').textContent = playing ? '暂停' : '播放';
     view.play.title = playing ? '暂停生成过程' : '播放生成过程';
@@ -366,6 +447,7 @@
   }
 
   function togglePlay() {
+    if (timeline.length < 2) return;
     if (state.timer !== null) {
       pause();
       renderTransport();
@@ -378,11 +460,81 @@
 
   function generateSeed(seed) {
     pause();
+    const previousSeed = state.seed;
+    const previousCache = cache;
     state.seed = seed;
-    view.seed.value = seed;
     cache = new Map();
+    try {
+      rebuildTimeline();
+    } catch (error) {
+      state.seed = view.seed.value = previousSeed;
+      cache = previousCache;
+      showStatus(`种子「${seed}」生成失败。 ${error.message}`);
+      renderTransport();
+      return;
+    }
+    view.seed.value = seed;
     for (const pane of panes) pane.selected = null;
-    rebuildTimeline();
+    renderWorkspace();
+    renderFrame();
+  }
+
+  function showStatus(message) {
+    view.status.textContent = message;
+    view.status.hidden = !message;
+  }
+
+  function showPackSelection(index) {
+    const pane = panes[index];
+    const selection = pane.draftPacks || state.growth[index];
+    for (const [key, field] of Object.entries(pane.packSelects)) field.value = selection[key];
+    const summary = selection.preset ? catalog.get('preset', selection.preset) : catalog.get('ruleset', selection.ruleset);
+    pane.packSummary.textContent = summary.description || '';
+    pane.packSummary.hidden = !summary.description || Boolean(pane.draftPacks);
+  }
+
+  function setPackFields(index, open) {
+    panes[index].packFields.hidden = !open;
+    panes[index].expand.setAttribute('aria-expanded', String(open));
+  }
+
+  function switchPacks(index, key, value) {
+    const pane = panes[index];
+    const previous = pane.draftPacks || state.growth[index];
+    const presets = catalog.list('preset');
+    let next;
+    if (key === 'preset') {
+      const preset = presets.find((item) => item.key === value);
+      if (!preset) return;
+      next = { preset: preset.key, ruleset: preset.ruleset, pool: preset.pool };
+    } else {
+      next = { ...previous, [key]: value };
+      next.preset = presets.find((p) => p.ruleset === next.ruleset && p.pool === next.pool)?.key || '';
+    }
+    pause();
+    try {
+      catalog.resolve(next);
+      layoutFor(growthId, index, next);
+    } catch (error) {
+      pane.draftPacks = next;
+      showPackSelection(index);
+      setPackFields(index, true);
+      pane.packError.textContent = `当前仍显示上次成功的组合。 ${error.message}`;
+      pane.packError.hidden = false;
+      renderTransport();
+      return;
+    }
+    const position = cursorPosition();
+    state.growth[index] = next;
+    const retained = new Set(state.growth.filter(Boolean).map((config) => JSON.stringify([growthId, config.ruleset, config.pool])));
+    for (const [cacheKey, layout] of cache) {
+      if (layout.id === growthId && !retained.has(cacheKey)) cache.delete(cacheKey);
+    }
+    pane.draftPacks = null;
+    pane.selected = null;
+    pane.packError.hidden = true;
+    state.active = index;
+    rebuildTimeline(position);
     renderWorkspace();
     renderFrame();
   }
@@ -392,14 +544,26 @@
     if (previous === id) { activate(index); return; }
     pause();
     const position = cursorPosition();
-    if (index === 0 && state.algorithms[1] === id) {
-      const alternate = minecraftVariants.find((variant) => variant !== id);
-      state.algorithms[1] = !state.comparing && gameOf(id) === 'minecraft' ? alternate : previous;
+    const openPair = index === 0 && !state.comparing && id === growthId;
+    try {
+      layoutFor(id, index);
+      if (openPair) layoutFor(id, 1);
+    } catch (error) {
+      panes[index].select.value = previous;
+      showStatus(`无法生成「${nameOf(id)}」。 ${error.message}`);
+      renderTransport();
+      return;
+    }
+    if (openPair) {
+      state.algorithms[1] = growthId;
+      state.comparing = true;
       panes[1].selected = null;
     }
     if (index === 0 && gameOf(id) === 'minecraft') state.minecraft = id;
     state.algorithms[index] = id;
     panes[index].selected = null;
+    panes[index].draftPacks = null;
+    panes[index].packError.hidden = true;
     state.active = index;
     for (const pane of panes) pane.scene.clearMove();
     rebuildTimeline(position);
@@ -410,6 +574,13 @@
   function toggleCompare() {
     pause();
     const position = cursorPosition();
+    if (!state.comparing) {
+      try { layoutFor(state.algorithms[1], 1); } catch (error) {
+        showStatus(`无法生成 B 窗布局。 ${error.message}`);
+        renderTransport();
+        return;
+      }
+    }
     state.comparing = !state.comparing;
     state.active = 0;
     for (const pane of panes) pane.scene.clearMove();
@@ -485,7 +656,7 @@
       if (!button) return;
       const pane = panes[state.active];
       pane.selected = Number(button.dataset.neighbor);
-      if (!onHeight(pane.frame.rooms[pane.selected], pane.level)) pane.level = null;
+      if (!onHeight(pane.frame.rooms[pane.selected], pane)) pane.level = null;
       updateScene(state.active);
       if (!pane.isolated) pane.scene.focusRoom(pane.frame.rooms[pane.selected]);
       renderInspector();
@@ -559,10 +730,40 @@
     });
   }
 
-  renderAlgorithmList();
-  initGuide();
-  bindControls();
-  rebuildTimeline({ end: true });
-  renderWorkspace();
-  renderFrame();
+  async function initialize() {
+    try {
+      if (!catalog) throw new Error('无法读取内容目录。');
+      await catalog.ready;
+      populatePacks();
+      if (catalog.diagnostics?.length) showStatus(catalog.diagnostics.map((item) => item.message).join(' '));
+    } catch (error) {
+      showStatus(`连接器内容包加载失败。 ${error.message}`);
+    }
+    renderAlgorithmList();
+    initGuide();
+    bindControls();
+    const canComparePacks = state.growth.every(Boolean);
+    if (!canComparePacks) {
+      view.algorithms.querySelector(`[data-algorithm="${growthId}"]`).disabled = true;
+      for (const pane of panes) pane.select.querySelector(`option[value="${growthId}"]`).disabled = true;
+      if (view.status.hidden) showStatus('连接器生长缺少可用的规则和模板组合。');
+    }
+    if (location.hash === '#stronghold') state.algorithms[0] = state.minecraft = 'stronghold';
+    if (location.hash === `#${growthId}` && canComparePacks) {
+      state.algorithms = [growthId, growthId];
+      state.comparing = true;
+    }
+    try {
+      rebuildTimeline({ end: true });
+    } catch (error) {
+      showStatus(`无法加载请求的布局。 ${error.message}`);
+      state.algorithms = ['dead', 'minecraft'];
+      state.comparing = false;
+      rebuildTimeline({ end: true });
+    }
+    renderWorkspace();
+    renderFrame();
+  }
+
+  initialize();
 })();

@@ -3,7 +3,10 @@
 
   const { roles, portalRoute, label, port, connectionPath } = globalThis.DungeonGenerators;
   const { addRoom: minecraftRoom, addPassage: minecraftPassage } = globalThis.DungeonMinecraftMesh;
-  const { doorHeights, worldPoint } = globalThis.StrongholdTemplates;
+  const legacyGeometry = globalThis.StrongholdTemplates;
+  const geometryOf = (layout) => layout.config ? globalThis.GrowthCatalog.get('pool', layout.config.pool) : legacyGeometry;
+  const viewKindOf = (layout) => layout?.viewKind ?? layout?.id;
+  const roleStyle = (role) => roles[role] ?? roles.normal;
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const add = (a, b) => a.map((number, index) => number + b[index]);
   const subtract = (a, b) => a.map((number, index) => number - b[index]);
@@ -124,7 +127,7 @@
   const neutral = rgb('#7893c9');
 
   function colors(role) {
-    const accent = rgb(roles[role].color);
+    const accent = rgb(roleStyle(role).color);
     return {
       accent,
       floor: tint(mix(baseBlue, accent, 0.42)),
@@ -167,7 +170,7 @@
   function symbol(mesh, center, size, role, side) {
     const [x, y, z] = center;
     const position = (a, b) => side ? [x + a, y + b, z] : [x + a, y, z + b];
-    const color = tint(rgb(roles[role].color), .95);
+    const color = tint(rgb(roleStyle(role).color), .95);
     mesh.stroke([position(0, -size), position(size, 0), position(0, size), position(-size, 0)], color);
     if (role !== 'normal') {
       mesh.stroke([position(0, -size * .46), position(size * .46, 0), position(0, size * .46), position(-size * .46, 0)], color);
@@ -353,7 +356,7 @@
     return grid;
   }
 
-  const onLevel = (room, level) => level === null || doorHeights(room).includes(level);
+  const onLevel = (room, level, geometry) => level === null || (geometry.doorHeights ?? legacyGeometry.doorHeights)(room).includes(level);
 
   function visiblePassage(points, from, to) {
     if (from && to) return points;
@@ -362,11 +365,13 @@
   }
 
   function buildMesh(frame, layout, selected, showFocus, level, cutaway, isolated) {
-    const { id, projection } = layout;
+    const { projection } = layout;
+    const viewKind = viewKindOf(layout);
+    const geometry = geometryOf(layout);
     const model = new Mesh();
     const previews = new Mesh();
     const doors = frame.rooms.map(() => new Set());
-    const visible = (room) => onLevel(room, level) && (!isolated || room.id === selected);
+    const visible = (room) => onLevel(room, level, geometry) && (!isolated || room.id === selected);
     const routeRooms = new Set();
     for (const edge of frame.edges) {
       const a = frame.rooms[edge.a];
@@ -374,7 +379,7 @@
       const from = visible(a);
       const to = visible(b);
       if (!from && !to) continue;
-      if (id === 'stronghold') {
+      if (viewKind === 'stronghold') {
         if (edge.toPortal) {
           routeRooms.add(a.id);
           routeRooms.add(b.id);
@@ -387,7 +392,7 @@
         doors[edge.b].add(edge.bSide);
         const path = visiblePassage(connectionPath(a, b, edge, projection), from, to);
         if (projection === 'side') sidePassage(model, path, color);
-        else if (projection === 'space') minecraftPassage(model, path, id, cutaway, edge.toPortal);
+        else if (viewKind === 'minecraft') minecraftPassage(model, path, viewKind, cutaway, edge.toPortal);
         else planPassage(model, path, color);
       } else {
         const centers = [a, b].map((room) => [room.x, room.y + (projection === 'side' ? room.h / 2 : .13), room.z]);
@@ -400,7 +405,8 @@
       const tone = colors(room.role);
       if (!room.shell) candidateBox(previews, room, tone.accent);
       else if (projection === 'side') sideRoom(model, room, doors[room.id], tone);
-      else if (projection === 'space') minecraftRoom(model, room, doors[room.id], id, cutaway);
+      else if (viewKind === 'stronghold') globalThis.DungeonStrongholdMesh.addRoom(model, room, cutaway, geometry);
+      else if (viewKind === 'minecraft') minecraftRoom(model, room, doors[room.id], viewKind, cutaway);
       else planRoom(model, room, doors[room.id], tone);
       if (room.id === selected || (showFocus && selected === null && room.id === frame.focus)) {
         const top = room.y + (room.shell ? room.h : room.h * .68) + .04;
@@ -414,13 +420,13 @@
       const room = frame.rooms[entry.room];
       if (!visible(room)) continue;
       const inspecting = room.id === selected || (showFocus && frame.focusPort?.room === room.id && frame.focusPort.id === entry.id);
-      if (id === 'stronghold' && entry.state === 'inactive' && !inspecting) continue;
+      if (viewKind === 'stronghold' && entry.state === 'inactive' && !inspecting) continue;
       portMark(model, room, entry, cutaway, inspecting);
     }
     if (frame.candidate && !isolated && (level === null || frame.focusPort?.point[1] === level)) {
       const candidate = frame.candidate;
       const color = rgb('#ff7b9b');
-      if (id === 'stronghold') {
+      if (viewKind === 'stronghold') {
         // The rejected volume can coincide with an existing wall or floor.
         const bottom = floorRectangle(candidate.x, candidate.y, candidate.z, candidate.w, candidate.d);
         const top = bottom.map(([x, y, z]) => [x, y + candidate.h, z]);
@@ -430,7 +436,7 @@
         bottom.forEach((point, index) => previews.line(point, top[index], edge));
       } else candidateBox(previews, candidate, color, true);
     }
-    if (id === 'stronghold') model.faces = globalThis.StrongholdSurfaces.resolve(model.faces);
+    if (viewKind === 'stronghold') model.faces = globalThis.StrongholdSurfaces.resolve(model.faces);
     return { model, previews };
   }
 
@@ -697,7 +703,7 @@
 
     setLayout(layout, frame, selected, showFocus, level = null, isolated = false) {
       const inspectId = isolated ? selected : null;
-      const openingView = layout.id === 'stronghold' && !isolated && showFocus && frame.phase === 0 && level === null;
+      const openingView = viewKindOf(layout) === 'stronghold' && !isolated && showFocus && frame.phase === 0 && level === null;
       const changed = this.layout !== layout || this.level !== level || this.inspectId !== inspectId || this.openingView !== openingView;
       if (!changed && this.frame === frame && this.selected === selected && this.showFocus === showFocus) return;
       this.layout = layout;
@@ -728,12 +734,12 @@
     }
 
     roomVisible(room) {
-      return onLevel(room, this.level) && (this.inspectId === null || room.id === this.inspectId);
+      return onLevel(room, this.level, geometryOf(this.layout)) && (this.inspectId === null || room.id === this.inspectId);
     }
 
     cutSides() {
       if (this.layout.projection !== 'space' || this.mode !== 'orbit') return '';
-      const yaw = this.layout.id === 'stronghold' ? this.orbit.yaw : this.defaultOrbit().yaw;
+      const yaw = viewKindOf(this.layout) === 'stronghold' ? this.orbit.yaw : this.defaultOrbit().yaw;
       return (Math.sin(yaw) < 0 ? 'w' : 'e') + (Math.cos(yaw) < 0 ? 'n' : 's');
     }
 
@@ -744,8 +750,8 @@
     }
 
     defaultOrbit() {
-      if (this.layout.id === 'stronghold') return { yaw: this.inspectId === null ? this.minecraftYaw : -.62, pitch: this.inspectId !== null ? .68 : this.level === null ? .72 : .89 };
-      if (this.layout.id === 'minecraft') return { yaw: this.minecraftYaw, pitch: .68 };
+      if (viewKindOf(this.layout) === 'stronghold') return { yaw: this.inspectId === null ? this.minecraftYaw : -.62, pitch: this.inspectId !== null ? .68 : this.level === null ? .72 : .89 };
+      if (viewKindOf(this.layout) === 'minecraft') return { yaw: this.minecraftYaw, pitch: .68 };
       return this.layout.projection === 'side' ? { yaw: .31, pitch: .37 } : { yaw: .61, pitch: .78 };
     }
 
@@ -761,15 +767,18 @@
         ? clamp(Math.atan2(neighbor.y - entrance.y, Math.hypot(...toward)) * .65 - .07, -.34, -.07)
         : .01;
       this.fly = { eye: [entrance.x, entrance.y + 1.52, entrance.z], yaw: Math.atan2(...toward), pitch };
-      if (this.layout.id === 'stronghold') this.enterRoom(entrance);
+      if (viewKindOf(this.layout) === 'stronghold') this.enterRoom(entrance);
       this.requestDraw();
     }
 
     enterRoom(room) {
       const entry = room.connectors.find((p) => p.id === 'entry');
-      const toward = { n: [0, -1], e: [1, 0], s: [0, 1], w: [-1, 0] }[room.facing];
-      const inward = Math.min(1.35, room.localD / 2);
-      this.fly = { eye: worldPoint(room, [entry.x, entry.y + 1.55, entry.z + inward]), yaw: Math.atan2(...toward), pitch: -.08 };
+      const { worldPoint } = geometryOf(this.layout);
+      const [dx, dz] = { n: [0, 1], e: [-1, 0], s: [0, -1], w: [1, 0] }[entry.side];
+      const inward = Math.min(1.35, (dx ? room.localW : room.localD) / 2);
+      const threshold = worldPoint(room, [entry.x, entry.y + 1.55, entry.z]);
+      const eye = worldPoint(room, [entry.x + dx * inward, entry.y + 1.55, entry.z + dz * inward]);
+      this.fly = { eye, yaw: Math.atan2(eye[0] - threshold[0], eye[2] - threshold[2]), pitch: -.08 };
     }
 
     focusRoom(room) {
@@ -779,7 +788,7 @@
         this.orbit.zoom = room.templateId && this.inspectId === null
           ? clamp(Math.max(room.w, room.h, room.d) * 3.3 / Math.min(1, aspect) / this.fit(aspect), .025, 1)
           : this.inspectId === null ? .48 : 1;
-      } else if (room.templateId) this.enterRoom(room);
+      } else if (viewKindOf(this.layout) === 'stronghold') this.enterRoom(room);
       else this.fly.eye = [room.x, room.y + 1.52, room.z];
       this.requestDraw();
     }
@@ -787,7 +796,7 @@
     setMode(mode) {
       const changed = this.mode !== mode;
       this.mode = mode;
-      if (changed && mode === 'fly' && this.layout?.id === 'stronghold' && this.selected !== null) {
+      if (changed && mode === 'fly' && viewKindOf(this.layout) === 'stronghold' && this.selected !== null) {
         this.enterRoom(this.frame.rooms[this.selected]);
       }
       this.clearMove();
@@ -871,12 +880,12 @@
       const [x, y] = toScreen(view, width, height);
       this.tag.hidden = view[2] < near || x < 0 || y < 32 || x > width || y > height - 9;
       if (this.tag.hidden) return;
-      const text = `${label(room)} · ${room.templateId ? room.template : roles[room.role].name}`;
+      const text = `${label(room)} · ${room.templateId ? room.template : roleStyle(room.role).name}`;
       if (this.tag.textContent !== text) this.tag.textContent = text;
       const margin = this.tag.offsetWidth / 2 + 6;
       this.tag.style.left = `${clamp(x, margin, width - margin)}px`;
       this.tag.style.top = `${y}px`;
-      this.tag.style.setProperty('--tag-color', roles[room.role].color);
+      this.tag.style.setProperty('--tag-color', roleStyle(room.role).color);
     }
 
     drawMap() {
@@ -915,7 +924,7 @@
         const [x, y] = flatten(room);
         const w = Math.max(4, room.w * ratio);
         const h = Math.max(4, (side ? room.h : room.d) * ratio);
-        const color = roles[room.role].color;
+        const color = roleStyle(room.role).color;
         context.fillStyle = `${color}${room.shell ? '56' : '24'}`;
         context.strokeStyle = room.id === this.selected ? '#ffffff' : color;
         context.fillRect(x - w / 2, y - h / 2, w, h);
@@ -938,7 +947,7 @@
     }
 
     zoom(factor) {
-      this.orbit.zoom = clamp(this.orbit.zoom * factor, this.layout.id === 'stronghold' ? .025 : .17, 4.8);
+      this.orbit.zoom = clamp(this.orbit.zoom * factor, viewKindOf(this.layout) === 'stronghold' ? .025 : .17, 4.8);
       this.requestDraw();
     }
 

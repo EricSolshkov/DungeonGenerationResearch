@@ -9,6 +9,8 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233c3064'/%3E%3Cpath d='m16 6 9 5v10l-9 5-9-5V11l9-5Zm-9 5 9 5 9-5M16 16v10' fill='none' stroke='%23decfff' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
   <script defer src="stronghold-templates.js"></script>
+  <script defer src="generation/catalog.js"></script>
+  <script defer src="generation/driver.js"></script>
   <script defer src="generators.js"></script>
   <script defer src="stronghold-mesh.js"></script>
   <script defer src="stronghold-surfaces.js"></script>
@@ -61,7 +63,7 @@
     <div class="intro">
       <div>
         <h1>地牢生成实验室</h1>
-        <p>观察四款游戏的房间生成，从候选布局到可漫游的三维地牢。</p>
+        <p>观察游戏地牢的生成过程，在同一种子下比较规则与房间模板。</p>
       </div>
       <form id="seed-form" class="seed-form">
         <label for="seed">随机种子</label>
@@ -78,6 +80,7 @@
         <section class="panel algorithm-panel">
           <h2 class="panel-title"><svg class="icon"><use href="#i-layers"/></svg>生成算法</h2>
           <div id="algorithms" class="algorithm-list" role="group" aria-label="选择生成算法"></div>
+          <p id="generation-status" class="generation-status" role="status" hidden></p>
         </section>
         <section class="panel stats-panel">
           <h2 class="panel-title"><svg class="icon"><use href="#i-bars"/></svg>布局统计</h2>
@@ -144,9 +147,19 @@
   <template id="pane-template">
     <div class="pane">
       <div class="compare-title" hidden>
-        <span class="pane-algorithm"><span class="algorithm-dot"></span><strong></strong></span>
+        <strong class="pane-letter"></strong>
         <div class="select-wrap"><select class="compare-select" aria-label="对比算法"></select></div>
         <span class="pane-phase"></span>
+      </div>
+      <div class="growth-controls" hidden>
+        <span class="select-wrap"><select class="growth-preset"></select></span>
+        <button type="button" class="growth-expand" aria-expanded="false">规则与模板</button>
+        <div class="growth-fields" hidden>
+          <label>生成规则<span class="select-wrap"><select class="growth-ruleset"></select></span></label>
+          <label>模板池<span class="select-wrap"><select class="growth-pool"></select></span></label>
+          <p class="growth-summary" hidden></p>
+        </div>
+        <p class="growth-error" role="status" hidden></p>
       </div>
       <div class="scene-stage">
         <canvas class="scene" tabindex="0" aria-label="三维地牢，可拖动视角或点击选择房间"></canvas>
@@ -181,7 +194,7 @@
         <div><dt>检查要塞</dt><dd>右上角按门槛标高筛选片段，包含生成时启用的门位和墙上的实际开口。起始楼梯底面为 Y=0。在房间检查中选取片段，点「单独查看」观察内部结构，再点门位旁的房间编号跳到相邻片段。金色描边标出入口到传送门房的生成树路线。</dd></div>
         <div><dt>自由漫游</dt><dd>拖动转向，<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移动，<kbd>Q</kbd><kbd>E</kbd> 升降。触屏可用方向键和升降按钮。Minecraft 漫游时显示完整墙体和顶盖。</dd></div>
         <div><dt>观察生成</dt><dd>用 <kbd>←</kbd><kbd>→</kbd> 单步，<kbd>Space</kbd> 播放或暂停，也可点击阶段或拖动进度。</dd></div>
-        <div><dt>并排对比</dt><dd>两侧共用种子和阶段进度。点击要操作的观察窗，即可单独控制它的视角。</dd></div>
+        <div><dt>并排对比</dt><dd>A、B 两窗共用种子和生成阶段，各自选择算法。选择「连接器生长」可比较两组预设，也可以单独切换任一侧的生成规则或模板池。点击观察窗可检查该侧的步骤与房间。</dd></div>
       </dl>
       <h3 id="source-heading">算法来源</h3>
       <p>要塞以 Java 版 1.17.1 的片段和门位为基准。种子控制实验室内的布局回放，其他算法采用各自的演示模板。</p>

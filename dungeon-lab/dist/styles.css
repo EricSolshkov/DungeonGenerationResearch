@@ -200,9 +200,18 @@ p, h1, h2, h3, ol, dl, dd { margin: 0; }
 .is-comparing .minimap { width: 130px; height: 94px; }
 .compare-title { min-height: 43px; padding: 5px 10px; display: flex; gap: 8px; justify-content: space-between; align-items: center; background: #141b2c; border-block: 1px solid transparent; }
 .pane.is-active .compare-title { border-bottom-color: #8e7acb; background: #211f37; }
-.pane-algorithm { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
-.pane-algorithm strong { font-size: .875rem; }
-.algorithm-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--game-color); }
+.pane-letter { color: var(--accent); font: 650 .875rem var(--mono); }
+.growth-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 7px 10px; background: #131b2c; border-bottom: 1px solid var(--border); }
+.growth-expand { padding: 5px; border: 0; color: #c5b9f3; background: transparent; font-size: .8125rem; white-space: nowrap; }
+.growth-expand::after { display: inline-block; content: ''; margin: 0 2px 2px 6px; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg); }
+.growth-expand[aria-expanded='true']::after { transform: rotate(225deg); margin-bottom: 0; }
+.growth-fields { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; }
+.growth-controls label { display: grid; gap: 3px; min-width: 0; font-size: .8125rem; color: var(--muted); }
+.growth-controls select { width: 100%; }
+.generation-status, .growth-error { margin-top: 6px; color: #e6bda3; font-size: .8125rem; overflow-wrap: anywhere; }
+.growth-error { grid-column: 1 / -1; margin: 0; }
+.growth-summary { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: .8125rem; line-height: 1.45; }
+.compare-title .pane-phase { flex: 1; }
 .compare-title .select-wrap { max-width: 100%; }
 .compare-title .select-wrap select { height: 30px; }
 .pane-phase { min-width: 0; color: #a8b5d1; text-align: right; font-size: .8125rem; line-height: 1.3; }
