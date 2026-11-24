@@ -174,6 +174,59 @@
     }
   }
 
+  // The two entry choices use the same physical staircase: north is its high end.
+  function tallStraightStairs({ box }, room) {
+    const high = room.connectors.find((p) => p.side === 'n').y;
+    const low = room.connectors.find((p) => p.side === 's').y;
+    const steps = (high - low) * 2;
+    const tread = (room.localD - 4) / steps;
+    box(1, low, 1, room.localW - 1, high, 2, stone);
+    for (let i = 1; i < steps; i++) {
+      const z = 2 + (i - 1) * tread;
+      box(1, low, z, room.localW - 1, high - i / 2, z + tread, i % 2 ? slab : stone);
+    }
+    // The floor forms the final tread and the landing at the low door.
+  }
+
+  function tallSpiralStairs({ box }, room) {
+    const high = room.connectors.find((p) => p.side === 'n').y;
+    const low = room.connectors.find((p) => p.side === 's').y;
+    let y = high;
+    const rise = (high - low) / 48;
+    const landing = (x, z, width = 2) =>
+      box(x - width / 2, y - .5, z - 1, x + width / 2, y, z + 1, stone);
+
+    // Each run spans the gap between two level landings around the central well.
+    function flight(x0, z0, x1, z1, steps) {
+      const dx = (x1 - x0) / steps;
+      const dz = (z1 - z0) / steps;
+      for (let i = 0; i < steps; i++) {
+        y -= rise;
+        if (y <= low) continue; // The low landing is part of the shell floor.
+        const x = x0 + i * dx, z = z0 + i * dz;
+        const nextX = x0 + (i + 1) * dx, nextZ = z0 + (i + 1) * dz;
+        const acrossX = dx === 0 ? 1 : 0, acrossZ = dz === 0 ? 1 : 0;
+        box(Math.min(x, nextX) - acrossX, Math.max(low, y - .5), Math.min(z, nextZ) - acrossZ,
+          Math.max(x, nextX) + acrossX, y, Math.max(z, nextZ) + acrossZ, i % 2 ? slab : stone);
+      }
+    }
+
+    landing(5.5, 2, 3);
+    flight(7, 2, 8, 2, 2);
+    landing(9, 2);
+    flight(9, 3, 9, 8, 9);
+    landing(9, 9);
+    flight(8, 9, 3, 9, 9);
+    landing(2, 9);
+    flight(2, 8, 2, 3, 8);
+    landing(2, 2);
+    flight(3, 2, 8, 2, 9);
+    landing(9, 2);
+    flight(9, 3, 9, 8, 9);
+    landing(9, 9);
+    flight(8, 9, 7, 9, 2);
+  }
+
   function fiveCrossing({ box }) {
     // The high bridge runs over the three-block-wide descending stair.
     box(1, 2, 1, 9, 3, 7, stone);
@@ -364,10 +417,12 @@
 
   const interiors = { start: spiral, spiralStairs: spiral, straightStairs, fiveCrossing,
     crossing, prison, chest: chestCorridor, library, portal };
+  const tallStairs = { straight: tallStraightStairs, spiral: tallSpiralStairs };
   function addRoom(mesh, room, cutaway, geometry = globalThis.StrongholdTemplates) {
     const brush = localBrush(mesh, room, geometry);
     shell(brush, room, cutaway, geometry.worldSide);
-    if (room.interior !== 'empty') interiors[room.templateId]?.(brush, room);
+    const interior = tallStairs[room.stairKind] ?? interiors[room.templateId];
+    if (room.interior !== 'empty') interior?.(brush, room);
   }
   globalThis.DungeonStrongholdMesh = { addRoom };
 })();

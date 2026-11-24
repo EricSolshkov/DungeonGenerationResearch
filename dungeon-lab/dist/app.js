@@ -306,7 +306,7 @@
   function frameStats({ frame, layout, doorHeights }) {
     const counts = stats(frame);
     if (layout.viewKind === 'stronghold') {
-      const stairPieces = frame.rooms.filter((room) => ['start', 'straightStairs', 'spiralStairs'].includes(room.templateId)).length;
+      const stairPieces = frame.rooms.filter((room) => room.stairKind || ['start', 'straightStairs', 'spiralStairs'].includes(room.templateId)).length;
       return { ...counts, pieces: frame.rooms.length, heights: heightsOf(frame.rooms, doorHeights).length, stairPieces };
     }
     return counts;
