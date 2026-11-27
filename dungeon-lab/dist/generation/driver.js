@@ -6,7 +6,7 @@
   const localPoint = ({ x, y, z }) => [x, y, z];
   const bounds = ({ x, y, z, w, h, d }) => [x - w / 2, y, z - d / 2, x + w / 2, y + h, z + d / 2];
   const overlaps = (a, b) => [0, 1, 2].every((i) => a[i] < b[i + 3] - .03 && a[i + 3] > b[i] + .03);
-  const roomLabel = (room) => 'R' + String(room.id + 1).padStart(2, '0');
+  const roomLabel = (room) => 'R' + String((room.sourceId ?? room.id) + 1).padStart(2, '0');
 
   // A trial owns its geometry, frontier and replay. Policies see spatial queries,
   // never mutate an accepted room, and choose a proposal before any instance RNG.

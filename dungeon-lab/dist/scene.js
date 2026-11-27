@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const { roles, portalRoute, label, port, connectionPath } = globalThis.DungeonGenerators;
+  const { roles, portalRoute, sourceId, label, port, connectionPath } = globalThis.DungeonGenerators;
   const { addRoom: minecraftRoom, addPassage: minecraftPassage } = globalThis.DungeonMinecraftMesh;
   const legacyGeometry = globalThis.StrongholdTemplates;
   const geometryOf = (layout) => layout.config ? globalThis.GrowthCatalog.get('pool', layout.config.pool) : legacyGeometry;
@@ -716,11 +716,18 @@
     }
 
     setLayout(layout, frame, selected, showFocus, level = null, isolated = false) {
-      const inspectId = isolated ? selected : null;
+      const inspectId = isolated ? sourceId(frame.rooms[selected]) : null;
+      const reference = frame.rooms[0]?.sourceId === undefined && layout.beforePrune ? layout.beforePrune : layout.final;
+      const referenceChanged = this.reference !== reference;
       const openingView = viewKindOf(layout) === 'stronghold' && !isolated && showFocus && frame.phase === 0 && level === null;
       const changed = this.layout !== layout || this.level !== level || this.inspectId !== inspectId;
       if (!changed && this.frame === frame && this.selected === selected && this.showFocus === showFocus) return;
+      // A crop changes the overview's fit distance. Preserve the actual orbit
+      // distance when scrubbing across it, in either direction.
+      const aspect = referenceChanged && !changed ? Math.max(.1, this.canvas.clientWidth / (this.canvas.clientHeight || 1)) : null;
+      const orbitDistance = aspect === null ? null : this.fit(aspect) * this.orbit.zoom;
       this.layout = layout;
+      this.reference = reference;
       this.frame = frame;
       this.selected = selected;
       this.showFocus = showFocus;
@@ -729,8 +736,8 @@
       const solids = frame.rooms.filter((room) => this.roomVisible(room));
       if (frame.candidate && !isolated) solids.push(frame.candidate);
       this.depthBounds = limits(solids);
-      if (changed) {
-        const viewedBounds = layout.final.rooms.filter((room) => this.roomVisible(room));
+      if (changed || referenceChanged) {
+        const viewedBounds = reference.rooms.filter((room) => this.roomVisible(room));
         this.bounds = limits(viewedBounds);
         this.corners = cornersOf(viewedBounds);
         if (layout.projection === 'space') {
@@ -739,9 +746,10 @@
         } else this.fitCenter = this.bounds.center;
         this.fitAspect = null;
       }
-      if (changed || this.openingView !== openingView) {
+      if (aspect !== null) this.orbit.zoom = orbitDistance / this.fit(aspect);
+      if (changed || referenceChanged || this.openingView !== openingView) {
         this.openingView = openingView;
-        this.mapBounds = openingView ? limits(layout.final.rooms.slice(0, 2)) : this.bounds;
+        this.mapBounds = openingView ? limits(reference.rooms.slice(0, 2)) : this.bounds;
         this.drawing.setGrid(makeGrid(this.mapBounds));
       }
       if (changed) this.reset();
@@ -750,7 +758,7 @@
     }
 
     roomVisible(room) {
-      return onLevel(room, this.level, geometryOf(this.layout)) && (this.inspectId === null || room.id === this.inspectId);
+      return onLevel(room, this.level, geometryOf(this.layout)) && (this.inspectId === null || sourceId(room) === this.inspectId);
     }
 
     cutSides() {
@@ -776,7 +784,7 @@
       const orbit = this.defaultOrbit();
       this.orbit = { ...orbit, target: [...this.fitCenter], zoom: 1 };
       if (this.openingView) {
-        const rooms = this.layout.final.rooms.slice(0, 2);
+        const rooms = this.reference.rooms.slice(0, 2);
         const corners = cornersOf(rooms);
         this.orbit.yaw = minecraftYaw(rooms);
         this.orbit.target = centerInView(this.mapBounds.center, corners, this.orbit);
@@ -784,8 +792,8 @@
         this.orbit.zoom = fitDistance(corners, this.orbit.target, this.orbit, aspect) / this.fit(aspect);
       }
       const entrance = this.frame.rooms.find((room) => this.roomVisible(room));
-      const firstEdge = this.layout.final.edges.find((edge) => edge.a === entrance.id || edge.b === entrance.id);
-      const neighbor = firstEdge && this.layout.final.rooms[firstEdge.a === entrance.id ? firstEdge.b : firstEdge.a];
+      const firstEdge = this.reference.edges.find((edge) => edge.a === entrance.id || edge.b === entrance.id);
+      const neighbor = firstEdge && this.reference.rooms[firstEdge.a === entrance.id ? firstEdge.b : firstEdge.a];
       const toward = neighbor ? [neighbor.x - entrance.x, neighbor.z - entrance.z] : [1, 0];
       const pitch = this.layout.projection === 'space' && neighbor
         ? clamp(Math.atan2(neighbor.y - entrance.y, Math.hypot(...toward)) * .65 - .07, -.34, -.07)

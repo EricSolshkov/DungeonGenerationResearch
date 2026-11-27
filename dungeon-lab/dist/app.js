@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const { algorithms, roles, portalRoute, generate, label, stats } = globalThis.DungeonGenerators;
+  const { algorithms, roles, portalRoute, generate, roomInFrame, label, stats } = globalThis.DungeonGenerators;
   const ids = Object.keys(algorithms);
   const growthId = 'connector-growth';
   const catalog = globalThis.GrowthCatalog;
@@ -227,10 +227,12 @@
       pane.levelSelect.parentElement.hidden = !detailed;
       if (detailed) {
         pane.doorHeights = heightReader(layout);
-        const heights = heightsOf(layout.final.rooms, pane.doorHeights);
+        const heights = heightsOf((layout.beforePrune ?? layout.final).rooms, pane.doorHeights);
         pane.levelSelect.innerHTML = '<option value="">全部标高</option>' + heights.map((height) =>
           `<option value="${height}">门槛 Y = ${height}</option>`).join('');
       }
+    } else if (layout.beforePrune && pane.frame !== frame && pane.selected !== null) {
+      pane.selected = roomInFrame(pane.frame.rooms[pane.selected], frame)?.id ?? null;
     }
     if (detailed) {
       const present = new Set(heightsOf(frame.rooms, pane.doorHeights));
@@ -279,7 +281,7 @@
     }
     const visible = state.algorithms.slice(0, comparing ? 2 : 1);
     const layouts = visible.map((id, index) => layoutFor(id, index));
-    const usedRoles = new Set(layouts.flatMap((layout) => layout.final.rooms.map(roleOf)));
+    const usedRoles = new Set(layouts.flatMap((layout) => (layout.beforePrune ?? layout.final).rooms.map(roleOf)));
     const items = Object.values(roles).filter((role) => usedRoles.has(role));
     if (layouts.some((layout) => layout.final.edges.some((edge) => edge.toPortal))) items.push(portalRoute);
     view.legend.innerHTML = items.map(({ name, color }) => `<span class="legend-item" style="--role-color:${color}">${name}</span>`).join('');

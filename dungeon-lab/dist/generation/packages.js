@@ -9,9 +9,11 @@ globalThis.GrowthPackageManifest = [
   { kind: 'ruleset', key: 'stronghold-experiment@1.0.0', src: 'rulesets/stronghold-experiment/1.0.0.js' },
   { kind: 'ruleset', key: 'stronghold-room-count@1.0.0', src: 'rulesets/stronghold-room-count/1.0.0.js' },
   { kind: 'ruleset', key: 'stronghold-room-count@1.1.0', src: 'rulesets/stronghold-room-count/1.1.0.js' },
+  { kind: 'ruleset', key: 'stronghold-room-count@1.2.0', src: 'rulesets/stronghold-room-count/1.2.0.js' },
   { kind: 'preset', key: 'stronghold-control@1.0.0', src: 'presets/stronghold/control.js' },
   { kind: 'preset', key: 'stronghold-experiment@1.0.0', src: 'presets/stronghold/experiment.js' },
   { kind: 'preset', key: 'stronghold-large-rooms@1.0.0', src: 'presets/stronghold/large-rooms.js' },
   { kind: 'preset', key: 'stronghold-larger-rooms@1.0.0', src: 'presets/stronghold/larger-rooms.js' },
   { kind: 'preset', key: 'stronghold-relief@1.0.0', src: 'presets/stronghold/relief.js' },
+  { kind: 'preset', key: 'stronghold-relief@1.1.0', src: 'presets/stronghold/relief-pruned.js' },
 ];

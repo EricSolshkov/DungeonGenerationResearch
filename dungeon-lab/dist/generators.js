@@ -105,7 +105,13 @@
   const directions = ['n', 'e', 's', 'w'];
   const offsets = { n: [0, -1], e: [1, 0], s: [0, 1], w: [-1, 0] };
   const opposite = { n: 's', e: 'w', s: 'n', w: 'e', up: 'down', down: 'up' };
-  const label = (room) => `R${String(room.id + 1).padStart(2, '0')}`;
+  const sourceId = (room) => room.sourceId ?? room.id;
+  const label = (room) => `R${String(sourceId(room) + 1).padStart(2, '0')}`;
+
+  function roomInFrame(room, frame) {
+    const originalId = sourceId(room);
+    return frame.rooms.find((candidate) => sourceId(candidate) === originalId);
+  }
 
   function randomFor(seed) {
     let state = 2166136261;
@@ -755,8 +761,12 @@
       builders[id](layout, randomFor(`${seed}/${id}`));
       if (id === 'stronghold') metadata.viewKind = 'stronghold';
     }
+    const final = layout.frames.at(-1);
+    if (final.rooms[0]?.sourceId !== undefined) {
+      metadata.beforePrune = layout.frames.findLast((frame) => frame.rooms[0]?.sourceId === undefined);
+    }
     const framesByPhase = algorithms[id].phases.map((_, phase) => layout.frames.filter((frame) => frame.phase === phase));
-    return { id, seed, projection: algorithms[id].projection, framesByPhase, final: layout.frames.at(-1), ...metadata };
+    return { id, seed, projection: algorithms[id].projection, framesByPhase, final, ...metadata };
   }
 
   function stats(frame) {
@@ -793,5 +803,5 @@
     return counts;
   }
 
-  globalThis.DungeonGenerators = { algorithms, roles, portalRoute, label, generate, stats, port, connectionPath };
+  globalThis.DungeonGenerators = { algorithms, roles, portalRoute, sourceId, roomInFrame, label, generate, stats, port, connectionPath };
 })();
